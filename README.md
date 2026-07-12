@@ -32,6 +32,11 @@ El robot está programado en Python, ejecutándose sobre el firmware personaliza
 *   **Ejecución Asíncrona:** Todo el control de misiones (`Run`) y funciones mecánicas están escritas en rutinas asíncronas (`async def`) utilizando `run_task`. Esto evita cuellos de botella en el procesamiento y permite mover el elevador o abrir garras simultáneamente mientras el robot se desplaza.
 *   **Giros mediante Control LQR:** A diferencia de giros básicos, implementamos un Regulador Cuadrático Lineal (LQR). Este utiliza retroalimentación constante del estado del giroscopio (ángulo y velocidad angular) más una ganancia *feedforward* para clavar los ángulos objetivo con una precisión matemática casi perfecta, eliminando la oscilación al frenar.
 *   **Seguidor de Línea Dinámico (PID adaptativo):** El algoritmo de seguimiento no usa valores estáticos. Los multiplicadores **Kp** y **Kd** escalan dinámicamente dependiendo de la velocidad de crucero y el factor de aceleración actual del robot. Esto asegura giros suaves a baja velocidad y reacciones agresivas cuando el robot va rápido en rectas largas.
-*   
 
----
+
+
+## 4. GALERIA DEL ROBOT
+<p align="center">
+  <img src="FotosRobot/SAMUEL-LADOIZQUIERDO.jpg" width="400" title="Vista lateral del chasis compacto">
+  <img src="FotosRobot/SAMUEL-ARRIBA-IZQUIERDO.jpeg" width="400" title="Vista superior y cableado">
+</p>
