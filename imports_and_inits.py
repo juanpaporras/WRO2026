@@ -20,7 +20,7 @@ async def getBlackLineError():
     valor_reflexion = await line.reflection()
     return (valor_reflexion / 10) - 8
 
-async def avance_gyro(target_heading, final_angle, start_speed, max_speed, end_speed, decel_start_angle, accel_rate, reset_gyro=True, stall_stop=True):
+async def avance_gyro(target_heading, final_angle, decel_start_angle, start_speed=30, max_speed=90, end_speed=30,accel_rate=4, reset_gyro=False, stall_stop=True):
     kp_base = 5
     ki_base = 0.001
     adapt_rate = 0.0001 
@@ -74,7 +74,7 @@ async def avance_gyro(target_heading, final_angle, start_speed, max_speed, end_s
     left_motor.hold()
     right_motor.hold()
 
-async def retrocede_gyro(target_heading, final_angle, start_speed, max_speed, end_speed, decel_start_angle, accel_rate, reset_gyro=True, kp_value=7, ki_value=0.001, kd_value=0, stall_stop=True):
+async def retrocede_gyro(target_heading, final_angle, decel_start_angle, start_speed=30, max_speed=90, end_speed=30, accel_rate=4, reset_gyro=False, kp_value=7, ki_value=0.001, kd_value=0, stall_stop=True):
     kp_base = kp_value  
     ki_base = ki_value  
     kd_base = kd_value  
@@ -130,7 +130,7 @@ async def retrocede_gyro(target_heading, final_angle, start_speed, max_speed, en
     left_motor.hold()
     right_motor.hold()
 
-async def giro (target_heading, reset_gyro=True, max_speed=80, min_speed=10, stop_threshold=0.05, max_time=1000):
+async def giro (target_heading, reset_gyro=False, max_speed=80, min_speed=10, stop_threshold=0.05, max_time=1000):
     if reset_gyro:
         hub.imu.reset_heading(0)
     left_motor.reset_angle(0)
@@ -165,7 +165,7 @@ async def giro (target_heading, reset_gyro=True, max_speed=80, min_speed=10, sto
     left_motor.brake()
     right_motor.brake()
 
-async def giro_pivot (target_heading, active_motor, reset_gyro=True, max_speed=100, min_speed=10, stop_threshold=0.05, max_time=1000):
+async def giro_pivot (target_heading, active_motor, reset_gyro=False, max_speed=90, min_speed=20, stop_threshold=0.05, max_time=1000):
     if reset_gyro:
         hub.imu.reset_heading(0)
     left_motor.reset_angle(0)
