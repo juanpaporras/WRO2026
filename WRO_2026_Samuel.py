@@ -114,11 +114,9 @@ async def medir_trayectos_manual():
         hub.system.set_stop_button((Button.CENTER,))
 
 async def getBlackLineError():
-    # Paréntesis extra para resolver el await antes de la división
     return ((await line.reflection()) / 10) - 8 
 
 async def getBlackLineWidth():
-    # Paréntesis extra para resolver el await antes del módulo
     return ((await line.reflection()) % 10)
 
 async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_inicial=40, accel_rate=2, potencia_final=10, decel_rate=2,kp_base=1.25 , kd_base=2.5):
@@ -344,9 +342,6 @@ async def Run():
     await seguir_linea_distancia (55)
     await avance_gyro (-90,1000,30,40,30,800,1.2,False)
     await dejar_bloques()
-    print("nigga")
-    print("otro cambio")
-    print ("Hola")
 #final Run
 #run_task(seguir_linea_hasta_interseccion ())
 #run_task(seguir_linea_distancia(700))
