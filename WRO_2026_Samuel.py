@@ -280,7 +280,7 @@ async def bajar_cuadro():
     await motor_dc_por_segundos(motorcuadro, 1000, 80)
 
 async def subir_cuadro():
-    await motor_dc_por_grados(motorcuadro, -200, 100)
+    await motor_dc_por_grados(motorcuadro, -220, 100)
 
 async def abrir_garra():
     await motor_dc_por_segundos(motorgarras, 1500, -100)
