@@ -204,7 +204,7 @@ async def giro_pivot (target_heading, active_motor, reset_gyro=False, max_speed=
     left_motor.brake()
     right_motor.brake()
 
-async def avance_hasta_linea(target_heading, start_speed=40, max_speed=50, accel_rate=1.2, reset_gyro=True, stall_stop=True):
+async def avance_hasta_linea(target_heading, start_speed=40, max_speed=50, accel_rate=1.2, reset_gyro=False, stall_stop=True):
     kp_base = 5
     ki_base = 0.001
     adapt_rate = 0.0001 
@@ -221,7 +221,7 @@ async def avance_hasta_linea(target_heading, start_speed=40, max_speed=50, accel
     integral_error = 0
     kp_min, kp_max = 0.5 * kp_base, 2 * kp_base
     ki_min, ki_max = 0.5 * ki_base, 2 * ki_base
-    while abs(await getBlackLineError()) >= 8:
+    while abs(await getBlackLineError()) >= 7:
         left_angle = abs(left_motor.angle()) 
         if current_speed < max_speed:
             current_speed += accel_rate

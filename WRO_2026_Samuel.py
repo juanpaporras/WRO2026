@@ -119,7 +119,7 @@ async def getBlackLineError():
 async def getBlackLineWidth():
     return ((await line.reflection()) % 10)
 
-async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_inicial=40, accel_rate=4, potencia_final=10, decel_rate=2,kp_base=1.25 , kd_base=2.5):
+async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_inicial=40, accel_rate=1, potencia_final=40, decel_rate=2,kp_base=1 , kd_base=2.5):
  
     diametro_rueda = 62.5  
     grados_objetivo = (distancia_mm * 360) / (math.pi * diametro_rueda)
@@ -190,7 +190,7 @@ async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_ini
     left_motor.hold()
     right_motor.hold()
 
-async def seguir_linea_hasta_interseccion(potencia_crucero=60, potencia_inicial=40, accel_rate=1 , kp_base=1.25 , kd_base=4, umbral_interseccion=7):
+async def seguir_linea_hasta_interseccion(potencia_crucero=60, potencia_inicial=40, accel_rate=1 , kp_base=1.2 , kd_base=2.5, umbral_interseccion=7):
  
     last_error = 0  
     potencia_actual = abs(potencia_inicial)
@@ -267,7 +267,7 @@ async def motor_dc_por_segundos(motor, milisegundos, potencia):
     motor.hold()
 
 async def subir_elevador_todo():
-    await motor_dc_por_segundos(motorElevador, 1000, 60)
+    await motor_dc_por_segundos(motorElevador, 500, 80)
 
 async def subir_elevador():
     await motor_dc_por_grados(motorElevador, 200, 100)
@@ -277,10 +277,10 @@ async def bajar_elevador():
     await motor_dc_por_segundos(motorElevador, 1000, -100)
 
 async def bajar_cuadro():
-    await motor_dc_por_segundos(motorcuadro, 1300, 80)
+    await motor_dc_por_segundos(motorcuadro, 1000, 80)
 
 async def subir_cuadro():
-    await motor_dc_por_grados(motorcuadro, -260, 100)
+    await motor_dc_por_grados(motorcuadro, -200, 100)
 
 async def abrir_garra():
     await motor_dc_por_segundos(motorgarras, 1500, -100)
@@ -295,34 +295,32 @@ async def cerrar_garra_poquito():
 async def dejar_bloques ():
     #bajar la garra hasta el mosaico
     await motor_dc_por_grados(motorElevador, -120, 70)
-    await wait (200)
     #abrir toda la garra despacio
     await motor_dc_por_grados(motorgarras, -100, 60)
     await motor_dc_por_segundos(motorgarras, 500, -80)
     await cerrar_garra_poquito()
-    await wait (100)
     await subir_elevador_todo()
     #cerrar garra para majar
     await motor_dc_por_grados(motorgarras, 135, 50)
     # baja para majar
-    await motor_dc_por_segundos(motorElevador, 600, -60)
+    await motor_dc_por_segundos(motorElevador, 500, -80)
     await subir_elevador_todo()
     #cerrar garra para majar
     await motor_dc_por_segundos(motorgarras, 500, 80)
     # baja para majar
-    await motor_dc_por_segundos(motorElevador, 600, -60)
+    await motor_dc_por_segundos(motorElevador, 500, -80)
     await subir_elevador_todo()
 
 async def dejar_bloques_2 (heading):
     #bajar la garra hasta el mosaico
-    retrocede_gyro (heading,20,10,max_speed=30)
+    await retrocede_gyro (heading,50,30,max_speed=30)
     await motor_dc_por_grados(motorElevador, -120, 70)
     await wait (200)
-    await motor_dc_por_grados(motorgarras, -30, 30)
-    avance_gyro (heading,200)
+    await motor_dc_por_grados(motorgarras, -20, 30)
+    await avance_gyro (heading,200,200,max_speed=40)
     #abrir toda la garra despacio
-    await motor_dc_por_grados(motorgarras, -100, 60)
-    await motor_dc_por_segundos(motorgarras, 500, -80)
+    await motor_dc_por_grados(motorgarras, -100, 45)
+    await motor_dc_por_segundos(motorgarras, 500, -45)
     await cerrar_garra_poquito()
     await wait (100)
     await subir_elevador_todo()
@@ -349,16 +347,15 @@ async def Run():
     await montarse_linea()
     await giro (90,False)
     await wait (100)
-    await seguir_linea_distancia (500)
     await seguir_linea_hasta_interseccion ()
+    await wait (200)
     await giro(-90,False)
     await wait (100)
-    await seguir_linea_distancia (500)
+    await seguir_linea_distancia (400)
     await avance_gyro (-90,1000,900,max_speed=40)
-    await dejar_bloques_2(-90)
+    await dejar_bloques()
 #final Run
-#run_task(seguir_linea_hasta_interseccion ())
-#run_task(seguir_linea_distancia(800))
-#run_task(avance_gyro(0,1460,1200,reset_gyro=True))
+run_task (bajar_cuadro())
+run_task (subir_cuadro())
 #run_task(medir_trayectos_manual())
-run_task(Run())
+#run_task(Run())
