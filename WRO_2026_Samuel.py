@@ -38,7 +38,7 @@ async def medir_trayectos_manual():
     cronometro_click = StopWatch()
     
     hub.system.set_stop_button(None)
-
+    await hub.speaker.play_notes(['C4/4', 'E4/4', 'G4/4'], tempo=120)
     left_motor.stop()
     right_motor.stop()
     left_motor.reset_angle(0)
@@ -68,16 +68,16 @@ async def medir_trayectos_manual():
                         while Button.CENTER in hub.buttons.pressed():
                             await wait(10)
                         break
+                        
                     await wait(10)
                     
                 if not es_doble_toque:
                     grados_izq = left_motor.angle()
                     grados_der = right_motor.angle()
-                    
                     grados_motor_promedio = (abs(grados_izq) + abs(grados_der)) / 2
                     distancia_mm = (grados_motor_promedio / 360) * (math.pi * diametro_rueda)
                     grados_chasis = hub.imu.heading()
-                    
+                    await hub.speaker.beep(1000, 50)
                     print(f"\n--- TRAMO {contador_trayecto} GUARDADO ---")
                     print(f" -> Para seguir_linea_distancia : {distancia_mm:.1f} mm")
                     print(f" -> Para avance_gyro (Grados)   : {grados_motor_promedio:.1f}°")
@@ -97,6 +97,7 @@ async def medir_trayectos_manual():
                     hub.imu.reset_heading(0)
                     
                 else:
+                    await hub.speaker.play_notes(['C4/4', 'E4/4', 'G4/4'], tempo=120)
                     print("\n========================= TABLA RESUMEN =========================")
                     print(" Tramo | Distancia (mm) | Motor (avance_gyro) | IMU (Rumbo)")
                     print("-----------------------------------------------------------------")
@@ -119,7 +120,7 @@ async def getBlackLineError():
 async def getBlackLineWidth():
     return ((await line.reflection()) % 10)
 
-async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_inicial=40, accel_rate=1, potencia_final=40, decel_rate=2,kp_base=1 , kd_base=2.5):
+async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_inicial=40, accel_rate=1, potencia_final=40, decel_rate=2,kp_base=1.2 , kd_base=3):
  
     diametro_rueda = 62.5  
     grados_objetivo = (distancia_mm * 360) / (math.pi * diametro_rueda)
@@ -190,7 +191,59 @@ async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_ini
     left_motor.hold()
     right_motor.hold()
 
-async def seguir_linea_hasta_interseccion(potencia_crucero=60, potencia_inicial=40, accel_rate=1 , kp_base=1.2 , kd_base=2.5, umbral_interseccion=7):
+async def seguir_linea_hasta_interseccion(potencia_crucero=60, potencia_inicial=40, accel_rate=1 , kp_base=1 , kd_base=3, umbral_interseccion=7):
+ 
+    last_error = 0  
+    potencia_actual = abs(potencia_inicial)
+    error_deadband = 0.05 
+    
+    while (await getBlackLineWidth()) < umbral_interseccion:
+        
+        if potencia_actual < potencia_crucero:
+            potencia_actual += accel_rate
+
+        if potencia_actual > potencia_crucero:
+            potencia_actual = potencia_crucero
+            
+        error = await getBlackLineError()
+        
+        if abs(error) <= error_deadband:
+            error = 0
+        else:
+            error = error - (error_deadband*(error/abs(error)))    
+        derivative = (error - last_error) 
+
+        factor_escala = min (potencia_crucero/ potencia_actual,2)
+        
+        kp_dinamico = kp_base * factor_escala 
+        kd_dinamico = kd_base  * factor_escala
+        if kp_dinamico > kp_base * 1.25:
+            kp_dinamico = kp_dinamico*1.3
+        if kd_dinamico > kd_base * 1.25 :
+            kd_dinamico = kd_dinamico*1.3
+   
+        turn = (kp_dinamico * error) + (kd_dinamico * derivative)
+        
+        limite_turn = potencia_actual * 0.4
+        turn_clamped = max(min(turn, limite_turn), -limite_turn)
+
+        if abs(error) < error_deadband:
+            turn_clamped = 0
+
+        dc_izq = potencia_actual - turn_clamped
+        dc_der = potencia_actual + turn_clamped
+
+     
+        left_motor.dc(dc_izq)
+        right_motor.dc(dc_der)
+        
+        last_error = error
+
+        wait(10)
+    left_motor.hold()
+    right_motor.hold()
+
+async def seguir_linea_hasta_media_interseccion(potencia_crucero=60, potencia_inicial=40, accel_rate=1 , kp_base=1 , kd_base=3, umbral_interseccion=5):
  
     last_error = 0  
     potencia_actual = abs(potencia_inicial)
@@ -278,6 +331,7 @@ async def bajar_elevador():
 
 async def bajar_cuadro():
     await motor_dc_por_segundos(motorcuadro, 1000, 80)
+    await motor_dc_por_grados(motorcuadro, -10, 100)
 
 async def subir_cuadro():
     await motor_dc_por_grados(motorcuadro, -220, 100)
@@ -328,34 +382,43 @@ async def dejar_bloques_2 (heading):
 async def montarse_linea ():
     await avance_gyro(0,60,30,30,40,30,2)
 
-#Prueba de dejar bloques
-"""
-    await abrir_garra()
-    await bajar_elevador()
-    await cerrar_garra()
-    await subir_elevador()
-    await avance_gyro (0,1000,30,40,30,800,1.2,True,True)
-    await dejar_bloques()
-"""
+async def Ruta_1_recoger_bloques ():
+        #Recoger Bloques
+        await avance_gyro (0,370,250,max_speed=60,reset_gyro=True)
+        await bajar_elevador()
+        await cerrar_garra()
+        await subir_elevador()
+        await retrocede_gyro (0,130,120,max_speed=60)
+
+        await giro (90)
+        await avance_gyro (90,250,200,max_speed=60)
+        await seguir_linea_distancia (1350)
+        await seguir_linea_hasta_interseccion ()
+        await giro (0)
+        await retrocede_gyro (0,125,90,max_speed=50)
+        await giro (-90)
+        await retrocede_gyro (-90,480,360,max_speed=70)
+
+
+        await bajar_cuadro()
+        await avance_gyro (-90,285,360,max_speed=70)
+        await giro_pivot (0,"left")
+        await seguir_linea_distancia (120)
+        await seguir_linea_hasta_media_interseccion()
+        await giro (131)
+        await retrocede_gyro (131,1350,1200)
+        await giro (90,max_speed=100,min_speed=70)
+        await giro (102)
+        await subir_cuadro ()
+        await giro (131)
+
 #Inicio Run
 async def Run():
-    await abrir_garra()
-    await bajar_elevador()
-    await cerrar_garra()
-    await subir_elevador()
-    await avance_hasta_linea(0,30,50,1.2)
-    await montarse_linea()
-    await giro (90,False)
-    await wait (100)
-    await seguir_linea_hasta_interseccion ()
-    await wait (200)
-    await giro(-90,False)
-    await wait (100)
-    await seguir_linea_distancia (400)
-    await avance_gyro (-90,1000,900,max_speed=40)
-    await dejar_bloques()
+    await Ruta_1_recoger_bloques ()
+    await wait (5000)
 #final Run
-run_task (bajar_cuadro())
-run_task (subir_cuadro())
-#run_task(medir_trayectos_manual())
-#run_task(Run())
+
+#run_task (bajar_cuadro())
+#run_task (subir_cuadro ())
+#run_task (medir_trayectos_manual())
+run_task(Run())

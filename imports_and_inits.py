@@ -130,7 +130,7 @@ async def retrocede_gyro(target_heading, final_angle, decel_start_angle, start_s
     left_motor.hold()
     right_motor.hold()
 
-async def giro (target_heading, reset_gyro=False, max_speed=80, min_speed=10, stop_threshold=0.05, max_time=1000):
+async def giro (target_heading, reset_gyro=False, max_speed=80, min_speed=40, max_time=800):
     if reset_gyro:
         hub.imu.reset_heading(0)
     left_motor.reset_angle(0)
@@ -160,12 +160,12 @@ async def giro (target_heading, reset_gyro=False, max_speed=80, min_speed=10, st
         control_input = max(min(control_input, max_speed), -max_speed)  
         left_motor.dc(control_input)
         right_motor.dc(-control_input)
-        if stopwatch.time() > max_time:
+        if (stopwatch.time() > max_time) or (target_heading == current_state[0]) :
             break
     left_motor.brake()
     right_motor.brake()
 
-async def giro_pivot (target_heading, active_motor, reset_gyro=False, max_speed=90, min_speed=20, stop_threshold=0.05, max_time=1000):
+async def giro_pivot (target_heading, active_motor, reset_gyro=False, max_speed=80, min_speed=40, stop_threshold=0.05, max_time=800):
     if reset_gyro:
         hub.imu.reset_heading(0)
     left_motor.reset_angle(0)
@@ -199,7 +199,7 @@ async def giro_pivot (target_heading, active_motor, reset_gyro=False, max_speed=
         elif active_motor == 'right':
             right_motor.dc(-control_input)  
             left_motor.hold() 
-        if stopwatch.time() > max_time:
+        if (stopwatch.time() > max_time) or (target_heading == current_state[0]):
             break
     left_motor.brake()
     right_motor.brake()
