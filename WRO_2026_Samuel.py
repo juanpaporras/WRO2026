@@ -408,14 +408,26 @@ async def Ruta_1_recoger_bloques ():
         await giro (131)
         await retrocede_gyro (131,1350,1200)
         await giro (90,max_speed=100,min_speed=70)
-        await giro (102)
+        await giro (105,max_speed=41,max_time=300)
         await subir_cuadro ()
-        await giro (131)
+        await giro (131,max_time=400)
+        await avance_gyro (131,200,150)
+        await giro_pivot (-90,"left")
+        
 
 #Inicio Run
 async def Run():
-    await Ruta_1_recoger_bloques ()
-    await wait (5000)
+    hub.imu.reset_heading(0)
+    await giro_pivot (-90,"left")
+    await wait (100)
+    await giro_pivot(90,"left")
+    await wait (100)
+    await giro_pivot(0,"left")
+    await wait (100)
+    await hub.speaker.play_notes(['C4/4', 'E4/4', 'G4/4'], tempo=120)
+
+    #await Ruta_1_recoger_bloques ()
+
 #final Run
 
 #run_task (bajar_cuadro())
