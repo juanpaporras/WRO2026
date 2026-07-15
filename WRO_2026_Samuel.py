@@ -29,6 +29,24 @@ import math
 from pybricks.tools import wait, StopWatch
 from pybricks.parameters import Button
 import math
+async def sonido_advertencia():
+
+    hub.speaker.volume(100) 
+    
+    await hub.speaker.beep(frequency=200, duration=1000)
+    await wait(100)
+    
+    await hub.speaker.beep(frequency=200, duration=1000)
+    await wait(100)
+    
+    await hub.speaker.beep(frequency=200, duration=2500)
+
+async def advertencia_bateria():
+    await hub.speaker.beep(1000, 50)
+    voltaje= ( hub.battery.voltage() / 1000.0 )
+    print (voltaje)
+    if float(voltaje) <= 7.8 or voltaje > 8.25:
+        await sonido_advertencia()
 
 async def boton():
  
@@ -44,7 +62,7 @@ async def boton():
          
     finally:
         hub.system.set_stop_button((Button.CENTER,))
-        ['C4/4', 'E4/4', 'G4/4']
+        await hub.speaker.play_notes(['C4/4', 'E4/4', 'G4/4'], tempo=120)
         await wait(500)
 
 async def medir_trayectos_manual():
@@ -137,7 +155,7 @@ async def getBlackLineError():
 async def getBlackLineWidth():
     return ((await line.reflection()) % 10)
 
-async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_inicial=40, accel_rate=1, potencia_final=40, decel_rate=2,kp_base=1.2 , kd_base=3):
+async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_inicial=40, accel_rate=8, potencia_final=40, decel_rate=2, kp_base=2 , kd_base=14):
  
     diametro_rueda = 62.5  
     grados_objetivo = (distancia_mm * 360) / (math.pi * diametro_rueda)
@@ -179,26 +197,23 @@ async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_ini
             
         derivative = (error - last_error) 
 
-        factor_escala = min (potencia_crucero/ potencia_actual,2)
+        kp_dinamico=kp_base
+        kd_dinamico=kd_base
+   
+        turn = (kp_dinamico * error) + (kd_dinamico * derivative)
         
-        kp_dinamico = kp_base * factor_escala
-        kd_dinamico = kd_base  * factor_escala
-        if kp_dinamico > kp_base * 1.25:
-            kp_dinamico = kp_dinamico*1.4
-        if kd_dinamico > kd_base * 1.25:
-            kd_dinamico = kd_dinamico*1.4
+        limite_turn = potencia_actual
+        turn_clamped = max(min(turn, limite_turn), -limite_turn)
+      
   
         turn = (kp_dinamico * error) + (kd_dinamico * derivative)
         
-        limite_turn = potencia_actual * 0.4
+        limite_turn = potencia_actual * 0.8
         turn_clamped = max(min(turn, limite_turn), -limite_turn)
 
-        if abs(error) < error_deadband:
-            dc_izq = potencia_actual + 10
-            dc_der = potencia_actual + 10
-        else:
-            dc_izq = potencia_actual - turn_clamped
-            dc_der = potencia_actual + turn_clamped
+        
+        dc_izq = potencia_actual - turn_clamped
+        dc_der = potencia_actual + turn_clamped
 
      
         left_motor.dc(dc_izq)
@@ -209,7 +224,7 @@ async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_ini
     left_motor.hold()
     right_motor.hold()
 
-async def seguir_linea_hasta_interseccion(potencia_crucero=60, potencia_inicial=40, accel_rate=1 , kp_base=1 , kd_base=3, umbral_interseccion=7):
+async def seguir_linea_hasta_interseccion(potencia_crucero=60, potencia_inicial=40, accel_rate=8 , kp_base=1.7 , kd_base=13, umbral_interseccion=7):
  
     last_error = 0  
     potencia_actual = abs(potencia_inicial)
@@ -231,15 +246,12 @@ async def seguir_linea_hasta_interseccion(potencia_crucero=60, potencia_inicial=
             error = error - (error_deadband*(error/abs(error)))    
         derivative = (error - last_error) 
 
-        factor_escala = min (potencia_crucero/ potencia_actual,2)
-        
-        kp_dinamico = kp_base * factor_escala 
-        kd_dinamico = kd_base  * factor_escala
-        if kp_dinamico > kp_base * 1.25:
-            kp_dinamico = kp_dinamico*1.3
-        if kd_dinamico > kd_base * 1.25 :
-            kd_dinamico = kd_dinamico*1.3
+        kp_dinamico=kp_base
+        kd_dinamico=kd_base
    
+        turn = (kp_dinamico * error) + (kd_dinamico * derivative)
+        
+        limite_turn = potencia_actual
         turn = (kp_dinamico * error) + (kd_dinamico * derivative)
         
         limite_turn = potencia_actual * 0.4
@@ -261,7 +273,7 @@ async def seguir_linea_hasta_interseccion(potencia_crucero=60, potencia_inicial=
     left_motor.hold()
     right_motor.hold()
 
-async def seguir_linea_hasta_media_interseccion(potencia_crucero=60, potencia_inicial=40, accel_rate=1 , kp_base=1 , kd_base=3, umbral_interseccion=5):
+async def seguir_linea_hasta_media_interseccion(potencia_crucero=60, potencia_inicial=40, accel_rate=1 , kp_base=4 , kd_base=28, umbral_interseccion=6):
  
     last_error = 0  
     potencia_actual = abs(potencia_inicial)
@@ -283,23 +295,18 @@ async def seguir_linea_hasta_media_interseccion(potencia_crucero=60, potencia_in
             error = error - (error_deadband*(error/abs(error)))    
         derivative = (error - last_error) 
 
-        factor_escala = min (potencia_crucero/ potencia_actual,2)
-        
-        kp_dinamico = kp_base * factor_escala 
-        kd_dinamico = kd_base  * factor_escala
-        if kp_dinamico > kp_base * 1.25:
-            kp_dinamico = kp_dinamico*1.3
-        if kd_dinamico > kd_base * 1.25 :
-            kd_dinamico = kd_dinamico*1.3
+        kp_dinamico=kp_base
+        kd_dinamico=kd_base
    
         turn = (kp_dinamico * error) + (kd_dinamico * derivative)
         
-        limite_turn = potencia_actual * 0.4
+        limite_turn = potencia_actual
         turn_clamped = max(min(turn, limite_turn), -limite_turn)
 
         if abs(error) < error_deadband:
             turn_clamped = 0
-
+        print (potencia_actual,turn_clamped)
+        print (error)
         dc_izq = potencia_actual - turn_clamped
         dc_der = potencia_actual + turn_clamped
 
@@ -308,8 +315,7 @@ async def seguir_linea_hasta_media_interseccion(potencia_crucero=60, potencia_in
         right_motor.dc(dc_der)
         
         last_error = error
-
-        wait(10)
+        await wait(10)
     left_motor.hold()
     right_motor.hold()
 
@@ -349,10 +355,10 @@ async def bajar_elevador():
 
 async def bajar_cuadro():
     await motor_dc_por_segundos(motorcuadro, 1000, 80)
-    await motor_dc_por_grados(motorcuadro, -10, 100)
+    await motor_dc_por_grados(motorcuadro, -20, 100)
 
 async def subir_cuadro():
-    await motor_dc_por_grados(motorcuadro, -220, 100)
+    await motor_dc_por_grados(motorcuadro, -280, 100)
 
 async def abrir_garra():
     await motor_dc_por_segundos(motorgarras, 1500, -100)
@@ -369,7 +375,7 @@ async def dejar_bloques ():
     await motor_dc_por_grados(motorElevador, -120, 70)
     #abrir toda la garra despacio
     await motor_dc_por_grados(motorgarras, -100, 60)
-    await motor_dc_por_segundos(motorgarras, 500, -80)
+    await motor_dc_por_segundos(motorgarras, 800, -80)
     await cerrar_garra_poquito()
     await subir_elevador_todo()
     #cerrar garra para majar
@@ -402,55 +408,58 @@ async def montarse_linea ():
 
 async def Ruta_1_recoger_bloques ():
         await avance_gyro (0,370,250,max_speed=60,reset_gyro=True)
-        await bajar_elevador()
         await cerrar_garra()
         await subir_elevador()
-        await retrocede_gyro (0,130,120,max_speed=60)
+        await retrocede_gyro (0,150,120,max_speed=60)
         
 async def Ruta_2_recoger_ladrillos_blancos():
         await giro (90)
-        await avance_gyro (90,250,200,max_speed=60)
+        await avance_gyro (90,250,200)
         await seguir_linea_distancia (1350)
         await seguir_linea_hasta_interseccion ()
         await giro (0)
-        await retrocede_gyro (0,125,90,max_speed=50)
+        await retrocede_gyro (0,190,90)
+        await wait(100)
         await giro (-90)
-        await retrocede_gyro (-90,480,360,max_speed=70)
+        await wait(100)
+        await retrocede_gyro (-90,520,360)
         await bajar_cuadro()
 
 async def Ruta_3_llevar_ladrillos_blancos():
-    await avance_gyro (-90,285,360,max_speed=70)
+    await avance_gyro (-90,280,250)
     await giro_pivot (0,"left")
-    await seguir_linea_distancia (120)
-    await seguir_linea_hasta_media_interseccion()
-    await giro (131)
-    await retrocede_gyro (131,1350,1200)
-    await giro (90,max_speed=100,min_speed=70)
-    await giro (105,max_speed=41,max_time=300)
+    await avance_gyro (0,120,40)
+    await seguir_linea_hasta_media_interseccion(potencia_crucero=50)
+    await wait(100)
+    await boton()
+    await giro (133)
+    await retrocede_gyro (133,1350,1200)
+    await giro_pivot (90,"left",max_speed=100)
+    await giro_pivot (133,"left",max_speed=70)
+    await avance_gyro (133,200,190,max_speed=60)
     await subir_cuadro ()
 
 async def Ruta_4_llevar_bloques_1():
-    await giro (131,max_time=400)
-    await avance_gyro (131,200,150)
-    await giro_pivot (-90,"left")
+    await avance_gyro (131,290,220,max_speed=70)
+    await giro(-90)
+    await avance_gyro(-90,1000,800,max_speed=60,stall_stop=True)
 
 
 #Inicio Run
 async def Run():
+    await advertencia_bateria ()
+    await multitask (bajar_cuadro(), subir_elevador_todo())
+    await multitask (subir_cuadro(), bajar_elevador())
+    await boton()
     await Ruta_1_recoger_bloques()
-    await boton()
     await Ruta_2_recoger_ladrillos_blancos()
-    await boton()
     await Ruta_3_llevar_ladrillos_blancos()
-    await boton()
     await Ruta_4_llevar_bloques_1()
     await dejar_bloques()
-    await boton()    
-    await avance_gyro()
     #await Ruta_1_recoger_bloques ()
 
 #final Run
-
+#run_task(sonido_advertencia())
 #run_task (bajar_cuadro())
 #run_task (subir_cuadro ())
 #run_task (medir_trayectos_manual())

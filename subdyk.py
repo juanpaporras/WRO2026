@@ -15,7 +15,6 @@ class Robot:
         #self.sensor_right = ColorSensor(Port.D)
         self.stopwatch = StopWatch()
         self.hub.imu.settings(angular_velocity_threshold=2, acceleration_threshold=300)
-        print("eyender is ready")  
     @classmethod
     def get_instance(cls):
         if cls._instance is None:

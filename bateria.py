@@ -1,7 +1,8 @@
 from pybricks.hubs import PrimeHub
+from pybricks.tools import wait, StopWatch
+hub = PrimeHub()
 
 # 1. Inicialización del microcontrolador
-hub = PrimeHub()
 
 # 2. Extracción de datos telemétricos
 voltaje_v = hub.battery.voltage() / 1000.0  # Conversión de milivoltios (mV) a voltios (V)

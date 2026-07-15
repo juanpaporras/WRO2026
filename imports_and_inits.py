@@ -20,7 +20,7 @@ async def getBlackLineError():
     valor_reflexion = await line.reflection()
     return (valor_reflexion / 10) - 8
 
-async def avance_gyro(target_heading, final_angle, decel_start_angle, start_speed=30, max_speed=90, end_speed=30,accel_rate=3, reset_gyro=False, stall_stop=True):
+async def avance_gyro(target_heading, final_angle, decel_start_angle, start_speed=30, max_speed=90, end_speed=30,accel_rate=3, reset_gyro=False, stall_stop=False):
     kp_base = 5
     ki_base = 0.001
     adapt_rate = 0.0001 
@@ -130,7 +130,7 @@ async def retrocede_gyro(target_heading, final_angle, decel_start_angle, start_s
     left_motor.hold()
     right_motor.hold()
 
-async def giro (target_heading, reset_gyro=False, max_speed=80, min_speed=26, max_time=3000):
+async def giro (target_heading, reset_gyro=False, max_speed=80, min_speed=33, max_time=3000):
     if reset_gyro:
         hub.imu.reset_heading(0)
     left_motor.reset_angle(0)
@@ -161,12 +161,12 @@ async def giro (target_heading, reset_gyro=False, max_speed=80, min_speed=26, ma
         left_motor.dc(control_input)
         right_motor.dc(-control_input)
         error = target_heading - current_state[0]
-        if (stopwatch.time() > max_time) or (abs(error) <= 0.01):
+        if (stopwatch.time() > max_time) or (abs(error) <= 0.05):
             break
     left_motor.brake()
     right_motor.brake()
 
-async def giro_pivot (target_heading, active_motor, reset_gyro=False, max_speed=80, min_speed=28, max_time=3000):
+async def giro_pivot (target_heading, active_motor, reset_gyro=False, max_speed=80, min_speed=33, max_time=3000):
     if reset_gyro:
         hub.imu.reset_heading(0)
     left_motor.reset_angle(0)
@@ -201,7 +201,7 @@ async def giro_pivot (target_heading, active_motor, reset_gyro=False, max_speed=
             right_motor.dc(-control_input)  
             left_motor.hold() 
         error = target_heading - current_state[0]
-        if (stopwatch.time() > max_time) or (abs(error) <= 0.01) :
+        if (stopwatch.time() > max_time) or (abs(error) <= 0.05) :
             break
     left_motor.brake()
     right_motor.brake()
