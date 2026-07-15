@@ -30,6 +30,23 @@ from pybricks.tools import wait, StopWatch
 from pybricks.parameters import Button
 import math
 
+async def boton():
+ 
+    hub.system.set_stop_button(None)
+    
+    try:
+        while Button.CENTER not in hub.buttons.pressed():
+
+            await wait(10)
+            
+        while Button.CENTER in hub.buttons.pressed():
+            await wait(10)
+         
+    finally:
+        hub.system.set_stop_button((Button.CENTER,))
+        ['C4/4', 'E4/4', 'G4/4']
+        await wait(500)
+
 async def medir_trayectos_manual():
 
     diametro_rueda = 62.5
@@ -177,10 +194,11 @@ async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_ini
         turn_clamped = max(min(turn, limite_turn), -limite_turn)
 
         if abs(error) < error_deadband:
-            turn_clamped = 0
-
-        dc_izq = potencia_actual - turn_clamped
-        dc_der = potencia_actual + turn_clamped
+            dc_izq = potencia_actual + 10
+            dc_der = potencia_actual + 10
+        else:
+            dc_izq = potencia_actual - turn_clamped
+            dc_der = potencia_actual + turn_clamped
 
      
         left_motor.dc(dc_izq)
@@ -383,13 +401,13 @@ async def montarse_linea ():
     await avance_gyro(0,60,30,30,40,30,2)
 
 async def Ruta_1_recoger_bloques ():
-        #Recoger Bloques
         await avance_gyro (0,370,250,max_speed=60,reset_gyro=True)
         await bajar_elevador()
         await cerrar_garra()
         await subir_elevador()
         await retrocede_gyro (0,130,120,max_speed=60)
-
+        
+async def Ruta_2_recoger_ladrillos_blancos():
         await giro (90)
         await avance_gyro (90,250,200,max_speed=60)
         await seguir_linea_distancia (1350)
@@ -398,34 +416,37 @@ async def Ruta_1_recoger_bloques ():
         await retrocede_gyro (0,125,90,max_speed=50)
         await giro (-90)
         await retrocede_gyro (-90,480,360,max_speed=70)
-
-
         await bajar_cuadro()
-        await avance_gyro (-90,285,360,max_speed=70)
-        await giro_pivot (0,"left")
-        await seguir_linea_distancia (120)
-        await seguir_linea_hasta_media_interseccion()
-        await giro (131)
-        await retrocede_gyro (131,1350,1200)
-        await giro (90,max_speed=100,min_speed=70)
-        await giro (105,max_speed=41,max_time=300)
-        await subir_cuadro ()
-        await giro (131,max_time=400)
-        await avance_gyro (131,200,150)
-        await giro_pivot (-90,"left")
-        
+
+async def Ruta_3_llevar_ladrillos_blancos():
+    await avance_gyro (-90,285,360,max_speed=70)
+    await giro_pivot (0,"left")
+    await seguir_linea_distancia (120)
+    await seguir_linea_hasta_media_interseccion()
+    await giro (131)
+    await retrocede_gyro (131,1350,1200)
+    await giro (90,max_speed=100,min_speed=70)
+    await giro (105,max_speed=41,max_time=300)
+    await subir_cuadro ()
+
+async def Ruta_4_llevar_bloques_1():
+    await giro (131,max_time=400)
+    await avance_gyro (131,200,150)
+    await giro_pivot (-90,"left")
+
 
 #Inicio Run
 async def Run():
-    hub.imu.reset_heading(0)
-    await giro_pivot (-90,"left")
-    await wait (100)
-    await giro_pivot(90,"left")
-    await wait (100)
-    await giro_pivot(0,"left")
-    await wait (100)
-    await hub.speaker.play_notes(['C4/4', 'E4/4', 'G4/4'], tempo=120)
-
+    await Ruta_1_recoger_bloques()
+    await boton()
+    await Ruta_2_recoger_ladrillos_blancos()
+    await boton()
+    await Ruta_3_llevar_ladrillos_blancos()
+    await boton()
+    await Ruta_4_llevar_bloques_1()
+    await dejar_bloques()
+    await boton()    
+    await avance_gyro()
     #await Ruta_1_recoger_bloques ()
 
 #final Run

@@ -20,7 +20,7 @@ async def getBlackLineError():
     valor_reflexion = await line.reflection()
     return (valor_reflexion / 10) - 8
 
-async def avance_gyro(target_heading, final_angle, decel_start_angle, start_speed=30, max_speed=90, end_speed=30,accel_rate=4, reset_gyro=False, stall_stop=True):
+async def avance_gyro(target_heading, final_angle, decel_start_angle, start_speed=30, max_speed=90, end_speed=30,accel_rate=3, reset_gyro=False, stall_stop=True):
     kp_base = 5
     ki_base = 0.001
     adapt_rate = 0.0001 
@@ -74,7 +74,7 @@ async def avance_gyro(target_heading, final_angle, decel_start_angle, start_spee
     left_motor.hold()
     right_motor.hold()
 
-async def retrocede_gyro(target_heading, final_angle, decel_start_angle, start_speed=30, max_speed=90, end_speed=30, accel_rate=4, reset_gyro=False, kp_value=7, ki_value=0.001, kd_value=0, stall_stop=True):
+async def retrocede_gyro(target_heading, final_angle, decel_start_angle, start_speed=30, max_speed=90, end_speed=30, accel_rate=3, reset_gyro=False, kp_value=7, ki_value=0.001, kd_value=0, stall_stop=True):
     kp_base = kp_value  
     ki_base = ki_value  
     kd_base = kd_value  
@@ -252,6 +252,67 @@ async def avance_hasta_linea(target_heading, start_speed=40, max_speed=50, accel
     left_motor.hold()
     right_motor.hold()
 
+async def retrocede_hasta_linea_gyro(target_heading, start_speed=40, max_speed=50, accel_rate=1.2, reset_gyro=False, kp_value=7, ki_value=0.001, kd_value=0, stall_stop=True):
+    kp_base = kp_value  
+    ki_base = ki_value  
+    kd_base = kd_value  
+    adapt_rate = 0.0001 
+    stopwatch = StopWatch()  
+    last_movement_time = stopwatch.time() 
+    
+    if reset_gyro:
+        hub.imu.reset_heading(0)
+        
+    left_motor.reset_angle(0)
+    right_motor.reset_angle(0)
+    
+    current_speed = -abs(start_speed)  
+    max_speed = -abs(max_speed)
+    accel_rate = abs(accel_rate)
+    
+    integral_error = 0
+    prev_error = 0
+    
+    kp_min, kp_max = 0.5 * kp_base, 2 * kp_base
+    ki_min, ki_max = 0.5 * ki_base, 2 * ki_base
+    
+    while abs(await getBlackLineError()) >= 7:
+        left_angle = abs(left_motor.angle())  
+        
+        if current_speed > max_speed:
+            current_speed -= accel_rate
+            current_speed = max(current_speed, max_speed)
+            
+        error = hub.imu.heading() - target_heading
+        integral_error += error  
+        
+        kp = kp_base + adapt_rate * abs(error)
+        ki = ki_base + adapt_rate * abs(integral_error)
+        kp = max(kp_min, min(kp, kp_max))
+        ki = max(ki_min, min(ki, ki_max))
+        
+        correction = (kp * error) + (ki * integral_error) + (kd_base * (error - prev_error))
+        prev_error = error 
+        
+        if stall_stop:
+            if abs(left_angle - abs(right_motor.angle())) > 100:
+                break
+                
+            current_time = stopwatch.time()
+            left_sp = abs(left_motor.speed())
+            
+            if (current_time - last_movement_time) > 200 and left_sp < 10:
+                break
+            if left_sp > 10:
+                last_movement_time = current_time
+                
+        left_motor.dc(current_speed - correction)
+        right_motor.dc(current_speed + correction)
+        
+        await wait(10)  
+
+    left_motor.hold()
+    right_motor.hold()
 
 
     
