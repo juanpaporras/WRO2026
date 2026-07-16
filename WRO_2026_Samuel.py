@@ -32,21 +32,23 @@ import math
 async def sonido_advertencia():
 
     hub.speaker.volume(100) 
-    
-    await hub.speaker.beep(frequency=200, duration=1000)
-    await wait(100)
-    
-    await hub.speaker.beep(frequency=200, duration=1000)
-    await wait(100)
-    
-    await hub.speaker.beep(frequency=200, duration=2500)
+    while True:
+        await hub.speaker.beep(frequency=200, duration=1000)
+        await wait(100)
+        
+        await hub.speaker.beep(frequency=200, duration=1000)
+        await wait(100)
+        
+        await hub.speaker.beep(frequency=200, duration=2500)
 
 async def advertencia_bateria():
     await hub.speaker.beep(1000, 50)
     voltaje= ( hub.battery.voltage() / 1000.0 )
     print (voltaje)
+
+
     if float(voltaje) <= 7.8 or voltaje > 8.25:
-        await sonido_advertencia()
+        await sonido_advertencia()    
 
 async def boton():
  
@@ -54,8 +56,8 @@ async def boton():
     
     try:
         while Button.CENTER not in hub.buttons.pressed():
-
-            await wait(10)
+            await hub.speaker.beep(1000, 50)
+            await wait(500)
             
         while Button.CENTER in hub.buttons.pressed():
             await wait(10)
@@ -155,7 +157,7 @@ async def getBlackLineError():
 async def getBlackLineWidth():
     return ((await line.reflection()) % 10)
 
-async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_inicial=40, accel_rate=8, potencia_final=40, decel_rate=2, kp_base=2 , kd_base=14):
+async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_inicial=40, accel_rate=8, potencia_final=40, decel_rate=2, kp_base=1 , kd_base=10):
  
     diametro_rueda = 62.5  
     grados_objetivo = (distancia_mm * 360) / (math.pi * diametro_rueda)
@@ -224,7 +226,7 @@ async def seguir_linea_distancia(distancia_mm, potencia_crucero=85, potencia_ini
     left_motor.hold()
     right_motor.hold()
 
-async def seguir_linea_hasta_interseccion(potencia_crucero=60, potencia_inicial=40, accel_rate=8 , kp_base=1.7 , kd_base=13, umbral_interseccion=7):
+async def seguir_linea_hasta_interseccion(potencia_crucero=60, potencia_inicial=40, accel_rate=8 , kp_base=1 , kd_base=10, umbral_interseccion=7):
  
     last_error = 0  
     potencia_actual = abs(potencia_inicial)
@@ -273,7 +275,7 @@ async def seguir_linea_hasta_interseccion(potencia_crucero=60, potencia_inicial=
     left_motor.hold()
     right_motor.hold()
 
-async def seguir_linea_hasta_media_interseccion(potencia_crucero=60, potencia_inicial=40, accel_rate=1 , kp_base=4 , kd_base=28, umbral_interseccion=6):
+async def seguir_linea_hasta_media_interseccion(potencia_crucero=60, potencia_inicial=40, accel_rate=1 , kp_base=2, kd_base=14, umbral_interseccion=6):
  
     last_error = 0  
     potencia_actual = abs(potencia_inicial)
@@ -305,8 +307,6 @@ async def seguir_linea_hasta_media_interseccion(potencia_crucero=60, potencia_in
 
         if abs(error) < error_deadband:
             turn_clamped = 0
-        print (potencia_actual,turn_clamped)
-        print (error)
         dc_izq = potencia_actual - turn_clamped
         dc_der = potencia_actual + turn_clamped
 
@@ -354,15 +354,16 @@ async def bajar_elevador():
     await motor_dc_por_segundos(motorElevador, 1000, -100)
 
 async def bajar_cuadro():
-    await motor_dc_por_segundos(motorcuadro, 1000, 80)
-    await motor_dc_por_grados(motorcuadro, -20, 100)
+    await motor_dc_por_grados(motorcuadro, 380, 80)
 
 async def subir_cuadro():
-    await motor_dc_por_grados(motorcuadro, -280, 100)
+    await motor_dc_por_segundos(motorcuadro, 1500,-80 )
+
+async def cerrar_cuadro():
+    await motor_dc_por_segundos(motorcuadro, 600, 100)
 
 async def abrir_garra():
     await motor_dc_por_segundos(motorgarras, 1500, -100)
-
 async def cerrar_garra():
     await motor_dc_por_segundos(motorgarras, 1500, 100)
 
@@ -417,22 +418,27 @@ async def Ruta_2_recoger_ladrillos_blancos():
         await avance_gyro (90,250,200)
         await seguir_linea_distancia (1350)
         await seguir_linea_hasta_interseccion ()
-        await giro (0)
-        await retrocede_gyro (0,190,90)
-        await wait(100)
-        await giro (-90)
-        await wait(100)
-        await retrocede_gyro (-90,520,360)
+        await giro_pivot(154,"left")
+        await giro_pivot(90,"right")
+        await giro(-90)
         await bajar_cuadro()
+        await retrocede_gyro(-90,290,200)
+        await boton()
+        await cerrar_cuadro ()
 
 async def Ruta_3_llevar_ladrillos_blancos():
-    await avance_gyro (-90,280,250)
-    await giro_pivot (0,"left")
-    await avance_gyro (0,120,40)
-    await seguir_linea_hasta_media_interseccion(potencia_crucero=50)
+    await boton()
+    await seguir_linea_hasta_media_interseccion()
+    await montarse_linea()
+    await giro(0)
+    await boton()
+    await avance_gyro (0,120,60)
+    await boton()
+    await seguir_linea_hasta_media_interseccion()
     await wait(100)
     await boton()
     await giro (133)
+    await wait(100)
     await retrocede_gyro (133,1350,1200)
     await giro_pivot (90,"left",max_speed=100)
     await giro_pivot (133,"left",max_speed=70)
@@ -448,7 +454,16 @@ async def Ruta_4_llevar_bloques_1():
 #Inicio Run
 async def Run():
     await advertencia_bateria ()
-    await multitask (bajar_cuadro(), subir_elevador_todo())
+    """
+    while True:
+        await boton()
+        await subir_cuadro()
+        await boton()
+        await bajar_cuadro()
+        await boton()
+        await cerrar_cuadro()
+    """
+    await subir_elevador_todo()
     await multitask (subir_cuadro(), bajar_elevador())
     await boton()
     await Ruta_1_recoger_bloques()
@@ -456,6 +471,7 @@ async def Run():
     await Ruta_3_llevar_ladrillos_blancos()
     await Ruta_4_llevar_bloques_1()
     await dejar_bloques()
+    await medir_trayectos_manual()
     #await Ruta_1_recoger_bloques ()
 
 #final Run
