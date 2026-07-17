@@ -16,19 +16,6 @@ motorgarras = Motor(Port.C)
 motorElevador = Motor(Port.E)
 motorcuadro = Motor(Port.A)
 
-from pybricks.tools import wait
-import math
-
-from pybricks.tools import wait, StopWatch
-import math
-
-from pybricks.tools import wait, StopWatch
-from pybricks.parameters import Button
-import math
-
-from pybricks.tools import wait, StopWatch
-from pybricks.parameters import Button
-import math
 async def sonido_advertencia():
 
     hub.speaker.volume(100) 
@@ -364,6 +351,7 @@ async def cerrar_cuadro():
 
 async def abrir_garra():
     await motor_dc_por_segundos(motorgarras, 1500, -100)
+
 async def cerrar_garra():
     await motor_dc_por_segundos(motorgarras, 1500, 100)
 
@@ -452,9 +440,18 @@ async def Ruta_4_llevar_bloques_1():
 
 
 #Inicio Run
+
 async def Run():
     await advertencia_bateria ()
-    """
+    await boton()
+    await subir_cuadro()
+    await boton()
+    await bajar_cuadro()
+    await boton()
+    await cerrar_cuadro()
+    await giro(90,reset_gyro=True)
+    await giro (0)
+    await avance_gyro(0,300,150)
     while True:
         await boton()
         await subir_cuadro()
@@ -473,10 +470,6 @@ async def Run():
     await dejar_bloques()
     await medir_trayectos_manual()
     #await Ruta_1_recoger_bloques ()
-
+    """
 #final Run
-#run_task(sonido_advertencia())
-#run_task (bajar_cuadro())
-#run_task (subir_cuadro ())
-#run_task (medir_trayectos_manual())
 run_task(Run())
