@@ -77,8 +77,8 @@ async def avance_gyro(target_heading, final_angle, decel_start_angle, start_spee
     left_motor.reset_angle(0)
     right_motor.reset_angle(0)
     
-    kp_base = 2.5   
-    kd_base = 0.4   
+    kp_base = 1.5   
+    kd_base = 0.5   
     
     derivada_filtrada = 0.0
     ALFA_FILTRO = 0.15     
@@ -231,18 +231,18 @@ async def retrocede_gyro(target_heading, final_angle, decel_start_angle, start_s
     left_motor.hold()
     right_motor.hold()
 
-async def giro(target_heading, reset_gyro=False, max_speed=90, min_speed=30, max_time=4000):
+async def giro(target_heading, reset_gyro=False, max_speed=850, min_speed=0, max_time=4000):
 
     if reset_gyro:
         hub.imu.reset_heading(0)
     
-    kp = 2.0   
-    ki = 0.3   
-    kd = 0.35  
+    kp = 11
+    ki = 0.032 
+    kd = 0.0025
     
-    tolerancia = 0.1  
+    tolerancia = 0.3  
     integral_error = 0.0
-    LIMITE_INTEGRAL = 80.0
+    LIMITE_INTEGRAL = 500
     
     derivada_filtrada = 0.0
     ALFA_FILTRO = 0.15
@@ -263,12 +263,15 @@ async def giro(target_heading, reset_gyro=False, max_speed=90, min_speed=30, max
         error = target_continuo - hub.imu.heading()
         
         if (error * prev_error) <= 0:
-            integral_error = 0.0
-        
+            integral_error = integral_error*-0.7
+
         if abs(error) <= tolerancia:
             break
-            
-        integral_error += error * dt
+        if error * dt * 2 > 70:
+            integral_error += 70
+        else:
+            integral_error += error * dt * 3
+
         integral_error = max(min(integral_error, LIMITE_INTEGRAL), -LIMITE_INTEGRAL)
             
         derivada_cruda = (error - prev_error) / dt
@@ -281,8 +284,8 @@ async def giro(target_heading, reset_gyro=False, max_speed=90, min_speed=30, max
             
         control_speed = max(min(control_speed, max_speed), -max_speed)
         
-        left_motor.dc(control_speed)
-        right_motor.dc(-control_speed)
+        left_motor.run(control_speed)
+        right_motor.run(-control_speed)
         
         prev_error = error
         
@@ -291,21 +294,22 @@ async def giro(target_heading, reset_gyro=False, max_speed=90, min_speed=30, max
             
         await wait(10)
         
-    left_motor.hold()
-    right_motor.hold()
+    left_motor.brake()
+    right_motor.brake()
+    await hub.speaker.beep(1000, 50)
 
-async def giro_pivot(target_heading, pivote_izquierdo=True, reset_gyro=False, max_speed=85, min_speed=32, max_time=5000):
+async def giro_pivot(target_heading, pivote_izquierdo=True, reset_gyro=False, max_speed=900, min_speed=0, max_time=5000):
 
     if reset_gyro:
         hub.imu.reset_heading(0)
     
-    kp = 2.5  
-    ki = 0.3   
-    kd = 0.7   
+    kp = 20
+    ki = 0.032 
+    kd = 0.0025
     
     tolerancia = 0.3
     integral_error = 0.0
-    LIMITE_INTEGRAL = 100.0 
+    LIMITE_INTEGRAL = 500 
     
     derivada_filtrada = 0.0
     ALFA_FILTRO = 0.15
@@ -332,28 +336,29 @@ async def giro_pivot(target_heading, pivote_izquierdo=True, reset_gyro=False, ma
         error = target_continuo - hub.imu.heading()
         
         if (error * prev_error) <= 0:
-            integral_error = 0.0
+            integral_error = integral_error*-0.5
             
         if abs(error) <= tolerancia:
             break
-            
-        integral_error += error * dt
+        if error * dt * 2 > 70:
+            integral_error += 70
+        else:
+            integral_error += error * dt * 3
         integral_error = max(min(integral_error, LIMITE_INTEGRAL), -LIMITE_INTEGRAL)
             
         derivada_cruda = (error - prev_error) / dt
         derivada_filtrada = (derivada_filtrada * (1.0 - ALFA_FILTRO)) + (derivada_cruda * ALFA_FILTRO)
         
         control_speed = (kp * error) + (ki * integral_error) + (kd * derivada_filtrada)
-        
         if abs(control_speed) < min_speed:
             control_speed = min_speed if control_speed > 0 else -min_speed
             
         control_speed = max(min(control_speed, max_speed), -max_speed)
         
         if pivote_izquierdo:
-            right_motor.dc(-control_speed)
+            right_motor.run(-control_speed)
         else:
-            left_motor.dc(control_speed)
+            left_motor.run(control_speed)
         
         prev_error = error
         
@@ -364,6 +369,7 @@ async def giro_pivot(target_heading, pivote_izquierdo=True, reset_gyro=False, ma
         
     left_motor.hold()
     right_motor.hold()
+    await hub.speaker.beep(1000, 50)
 
 async def avance_hasta_linea(target_heading, start_speed=40, max_speed=50, accel_rate=1.2, stall_stop=False):
     kp_base = 5
