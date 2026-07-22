@@ -231,146 +231,294 @@ async def retrocede_gyro(target_heading, final_angle, decel_start_angle, start_s
     left_motor.hold()
     right_motor.hold()
 
-async def giro(target_heading, reset_gyro=False, max_speed=850, min_speed=0, max_time=4000):
+
+async def giro(target_heading, tipo_carga="vacio", reset_gyro=False, max_speed=None, min_speed=None, accel_rate=1.5, decel_angle=None):
+    """
+    Ejecuta un giro diferencial de alta precisión con soporte para escenarios de carga (WRO 2026).
+    """
+    # Configuración de ganancias y límites según el escenario de carga[cite: 2]
+    if tipo_carga == "pesado":
+        max_speed = 60 if max_speed is None else max_speed
+        min_speed = 40 if min_speed is None else min_speed
+        decel_angle = 70.0 if decel_angle is None else decel_angle
+        kp = 3.0
+        ki = 1.0
+        kd = 0.06
+        zona_integral = 12.0
+        limite_integral = 15.0
+    elif tipo_carga == "medio":
+        max_speed = 70 if max_speed is None else max_speed
+        min_speed = 35 if min_speed is None else min_speed
+        decel_angle = 60.0 if decel_angle is None else decel_angle
+        kp = 3.1
+        ki = 0.9
+        kd = 0.05
+        zona_integral = 11.0
+        limite_integral = 15.0
+    else:  # "vacio"
+        max_speed = 100 if max_speed is None else max_speed
+        min_speed = 20 if min_speed is None else min_speed
+        decel_angle = 50.0 if decel_angle is None else decel_angle
+        kp = 3.2
+        ki = 0.7
+        kd = 0.05
+        zona_integral = 3.5
+        limite_integral = 12.0
 
     if reset_gyro:
         hub.imu.reset_heading(0)
-    
-    kp = 11
-    ki = 0.032 
-    kd = 0.0025
-    
-    tolerancia = 0.3  
-    integral_error = 0.0
-    LIMITE_INTEGRAL = 500
-    
-    derivada_filtrada = 0.0
-    ALFA_FILTRO = 0.15
-
+        
     heading_inicial = hub.imu.heading()
     target_continuo = obtener_target_continuo(target_heading, heading_inicial)
     prev_error = target_continuo - heading_inicial
     
-    stopwatch = StopWatch()
+    integral_error = 0.0
+    derivada_filtrada = 0.0
+    ALFA_FILTRO = 0.3  
+    
+    VOLTAJE_REFERENCIA = 8200.0  
+    FACTOR_DERIVA_IZQ = 1.0      
+    FACTOR_DERIVA_DER = 1.0      
+    
+    current_vel_limit = min_speed
+    tiempo_acumulado = 0.0  
+    
     timer_lazo = StopWatch()
     timer_lazo.reset()
+    
+    watch_estancamiento = StopWatch()
+    watch_estancamiento.reset()
+    error_anterior_bloqueo = 999.0
     
     while True:
         dt = timer_lazo.time() / 1000.0
         timer_lazo.reset()
         if dt <= 0.0: dt = 0.01
+        tiempo_acumulado += dt
         
         error = target_continuo - hub.imu.heading()
+        abs_error = abs(error)
+        
+        if abs_error <= 1:
+            break
+            
+        if abs(error - error_anterior_bloqueo) < 0.02:
+            if watch_estancamiento.time() > 500: 
+                break
+        else:
+            watch_estancamiento.reset()
+            error_anterior_bloqueo = error
+            
+        if abs_error <= decel_angle:
+            escala = abs_error / decel_angle
+            target_vel_limit = min_speed + (max_speed - min_speed) * escala
+            current_vel_limit = target_vel_limit 
+        else:
+            if current_vel_limit < max_speed:
+                current_vel_limit += accel_rate
+            else:
+                current_vel_limit = max_speed
+                
+        termino_p = kp * error
         
         if (error * prev_error) <= 0:
-            integral_error = integral_error*-0.7
-
-        if abs(error) <= tolerancia:
-            break
-        if error * dt * 2 > 70:
-            integral_error += 70
-        else:
-            integral_error += error * dt * 3
-
-        integral_error = max(min(integral_error, LIMITE_INTEGRAL), -LIMITE_INTEGRAL)
+            integral_error = 0.0
             
+        if abs_error < zona_integral:
+            integral_error += error * dt
+            integral_error = max(min(integral_error, limite_integral), -limite_integral)
+        else:
+            integral_error = 0.0
+            
+        termino_i = ki * integral_error
+        
         derivada_cruda = (error - prev_error) / dt
         derivada_filtrada = (derivada_filtrada * (1.0 - ALFA_FILTRO)) + (derivada_cruda * ALFA_FILTRO)
+        termino_d = kd * derivada_filtrada
         
-        control_speed = (kp * error) + (ki * integral_error) + (kd * derivada_filtrada)
+        salida_pid = termino_p + termino_i + termino_d
         
-        if abs(control_speed) < min_speed:
-            control_speed = min_speed if control_speed > 0 else -min_speed
+        if salida_pid > current_vel_limit:
+            salida_pid = current_vel_limit
+        elif salida_pid < -current_vel_limit:
+            salida_pid = -current_vel_limit
             
-        control_speed = max(min(control_speed, max_speed), -max_speed)
+        if (salida_pid * error) > 0 and abs_error > 0.8:
+            if abs(salida_pid) < min_speed:
+                salida_pid = min_speed if salida_pid > 0 else -min_speed
+                
+        control_speed_base = salida_pid
         
-        left_motor.run(control_speed)
-        right_motor.run(-control_speed)
+        voltaje_actual = hub.battery.voltage()
+        if voltaje_actual < 5000: voltaje_actual = 5000 
+        
+        factor_voltaje = VOLTAJE_REFERENCIA / voltaje_actual
+        control_speed_compensado = control_speed_base * factor_voltaje
+        
+        velocidad_izq_bruta = control_speed_compensado * FACTOR_DERIVA_IZQ
+        velocidad_der_bruta = -control_speed_compensado * FACTOR_DERIVA_DER
+        
+        velocidad_izq = max(min(velocidad_izq_bruta, 100.0), -100.0)
+        velocidad_der = max(min(velocidad_der_bruta, 100.0), -100.0)
+        
+        left_motor.dc(velocidad_izq)
+        right_motor.dc(velocidad_der)
         
         prev_error = error
-        
-        if stopwatch.time() > max_time:
-            break
-            
-        await wait(10)
-        
-    left_motor.brake()
-    right_motor.brake()
-    await hub.speaker.beep(1000, 50)
-
-async def giro_pivot(target_heading, pivote_izquierdo=True, reset_gyro=False, max_speed=900, min_speed=0, max_time=5000):
-
-    if reset_gyro:
-        hub.imu.reset_heading(0)
-    
-    kp = 20
-    ki = 0.032 
-    kd = 0.0025
-    
-    tolerancia = 0.3
-    integral_error = 0.0
-    LIMITE_INTEGRAL = 500 
-    
-    derivada_filtrada = 0.0
-    ALFA_FILTRO = 0.15
-
-    heading_inicial = hub.imu.heading()
-    target_continuo = obtener_target_continuo(target_heading, heading_inicial)
-    prev_error = target_continuo - heading_inicial
-    
-    if pivote_izquierdo:
-        left_motor.hold()
-    else:
-        right_motor.hold()
-    
-    stopwatch = StopWatch()
-    timer_lazo = StopWatch()
-    timer_lazo.reset()
-    
-    while True:
-        dt = timer_lazo.time() / 1000.0
-        timer_lazo.reset()
-        if dt <= 0.0: dt = 0.01
-        
-
-        error = target_continuo - hub.imu.heading()
-        
-        if (error * prev_error) <= 0:
-            integral_error = integral_error*-0.5
-            
-        if abs(error) <= tolerancia:
-            break
-        if error * dt * 2 > 70:
-            integral_error += 70
-        else:
-            integral_error += error * dt * 3
-        integral_error = max(min(integral_error, LIMITE_INTEGRAL), -LIMITE_INTEGRAL)
-            
-        derivada_cruda = (error - prev_error) / dt
-        derivada_filtrada = (derivada_filtrada * (1.0 - ALFA_FILTRO)) + (derivada_cruda * ALFA_FILTRO)
-        
-        control_speed = (kp * error) + (ki * integral_error) + (kd * derivada_filtrada)
-        if abs(control_speed) < min_speed:
-            control_speed = min_speed if control_speed > 0 else -min_speed
-            
-        control_speed = max(min(control_speed, max_speed), -max_speed)
-        
-        if pivote_izquierdo:
-            right_motor.run(-control_speed)
-        else:
-            left_motor.run(control_speed)
-        
-        prev_error = error
-        
-        if stopwatch.time() > max_time:
-            break
-            
         await wait(10)
         
     left_motor.hold()
     right_motor.hold()
     await hub.speaker.beep(1000, 50)
 
+
+async def giro_pivot(target_heading, pivote_izquierdo=True, tipo_carga="vacio", reset_gyro=False, max_speed=None, min_speed=None, accel_rate=1.5, decel_angle=None):
+    """
+    Ejecuta un giro con pivot de alta precisión con soporte para escenarios de carga (WRO 2026).
+    """
+    # Configuración de ganancias y límites según el escenario de carga[cite: 2]
+    if tipo_carga == "pesado":
+        max_speed = 60 if max_speed is None else max_speed
+        min_speed = 40 if min_speed is None else min_speed
+        decel_angle = 70.0 if decel_angle is None else decel_angle
+        kp = 3.0
+        ki = 1.0
+        kd = 0.06
+        zona_integral = 12.0
+        limite_integral = 15.0
+    elif tipo_carga == "medio":
+        max_speed = 70 if max_speed is None else max_speed
+        min_speed = 35 if min_speed is None else min_speed
+        decel_angle = 60.0 if decel_angle is None else decel_angle
+        kp = 3.1
+        ki = 0.9
+        kd = 0.05
+        zona_integral = 11.0
+        limite_integral = 15.0
+    else:  # "vacio"
+        max_speed = 75 if max_speed is None else max_speed
+        min_speed = 32 if min_speed is None else min_speed
+        decel_angle = 50.0 if decel_angle is None else decel_angle
+        kp = 3.2
+        ki = 0.8
+        kd = 0.05
+        zona_integral = 10.0
+        limite_integral = 15.0
+
+    if reset_gyro:
+        hub.imu.reset_heading(0)
+        
+    heading_inicial = hub.imu.heading()
+    
+    diferencia = (target_heading - heading_inicial) % 360
+    if diferencia > 180:
+        diferencia -= 360
+    target_continuo = heading_inicial + diferencia
+    
+    error = target_continuo - heading_inicial
+    prev_error = error 
+    
+    integral_error = 0.0
+    derivada_filtrada = 0.0
+    ALFA_FILTRO = 0.3  
+    VOLTAJE_REFERENCIA = 8200.0  
+    
+    current_vel_limit = min_speed
+    tiempo_acumulado = 0.0  
+    
+    timer_lazo = StopWatch()
+    timer_lazo.reset()
+    
+    watch_estancamiento = StopWatch()
+    watch_estancamiento.reset()
+    error_anterior_bloqueo = 999.0
+    
+    if pivote_izquierdo:
+        left_motor.hold()
+    else:
+        right_motor.hold()
+        
+    while True:
+        dt = timer_lazo.time() / 1000.0
+        timer_lazo.reset()
+        if dt <= 0.0: dt = 0.01
+        tiempo_acumulado += dt
+        
+        error = target_continuo - hub.imu.heading()
+        abs_error = abs(error)
+        
+        if abs_error > 360:
+            break
+            
+        if abs_error <= 0.5:
+            break
+            
+        if abs(error - error_anterior_bloqueo) < 0.02:
+            if watch_estancamiento.time() > 800: 
+                break
+        else:
+            watch_estancamiento.reset()
+            error_anterior_bloqueo = error
+            
+        if abs_error <= decel_angle:
+            escala = abs_error / decel_angle
+            target_vel_limit = min_speed + (max_speed - min_speed) * escala
+            current_vel_limit = target_vel_limit 
+        else:
+            if current_vel_limit < max_speed:
+                current_vel_limit += accel_rate
+            else:
+                current_vel_limit = max_speed
+                
+        termino_p = kp * error
+        
+        if (error * prev_error) <= 0:
+            integral_error = 0.0
+            
+        if abs_error < zona_integral:
+            integral_error += error * dt
+            integral_error = max(min(integral_error, limite_integral), -limite_integral)
+        else:
+            integral_error = 0.0
+            
+        termino_i = ki * integral_error
+        
+        derivada_cruda = (error - prev_error) / dt
+        derivada_filtrada = (derivada_filtrada * (1.0 - ALFA_FILTRO)) + (derivada_cruda * ALFA_FILTRO)
+        termino_d = kd * derivada_filtrada
+        
+        salida_pid = termino_p + termino_i + termino_d
+        
+        if salida_pid > current_vel_limit:
+            salida_pid = current_vel_limit
+        elif salida_pid < -current_vel_limit:
+            salida_pid = -current_vel_limit
+            
+        if (salida_pid * error) > 0 and abs_error > 0.8:
+            if abs(salida_pid) < min_speed:
+                salida_pid = min_speed if salida_pid > 0 else -min_speed
+                
+        control_speed_base = salida_pid
+        
+        voltaje_actual = hub.battery.voltage()
+        if voltaje_actual < 5000: voltaje_actual = 5000 
+        
+        factor_voltaje = VOLTAJE_REFERENCIA / voltaje_actual
+        control_speed_compensado = control_speed_base * factor_voltaje
+        
+        velocidad_motor = max(min(control_speed_compensado, 100.0), -100.0)
+        
+        if pivote_izquierdo:
+            right_motor.dc(-velocidad_motor)
+        else:
+            left_motor.dc(velocidad_motor)
+            
+        prev_error = error
+        await wait(10)
+        
+    left_motor.hold()
+    right_motor.hold()
+    await hub.speaker.beep(1000, 50)
 async def avance_hasta_linea(target_heading, start_speed=40, max_speed=50, accel_rate=1.2, stall_stop=False):
     kp_base = 5
     ki_base = 0.001

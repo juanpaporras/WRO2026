@@ -498,9 +498,9 @@ async def Ruta_2_recoger_ladrillos_blancos():
 async def Ruta_3_llevar_ladrillos_blancos():
     await seguir_linea_hasta_interseccion("derecha")
     await montarse_linea(-90)
-    await giro(0, max_speed=700)
+    await giro(0)
     await seguir_linea_hasta_interseccion("derecha")
-    await giro (132,max_speed=700)
+    await giro (132)
     await wait(100)
     await retrocede_gyro (132,1262,1050)
     await giro_pivot (90,False)
@@ -543,6 +543,20 @@ async def Ruta_7_recoger_ladrillos_amarillos():
 
 async def Run():
     await advertencia_bateria()
+    hub.imu.reset_heading(0)
+    await giro_pivot(90,reset_gyro=True)
+    await wait(100)
+    await giro_pivot(180)
+    await wait(1000)
+    await giro_pivot(0)
+    print(obtener_heading_normalizado())
+
+
+
+
+
+
+    await advertencia_bateria()
     await subir_elevador_todo()
     await subir_cuadro()
     await boton()
@@ -557,5 +571,6 @@ async def Run():
     hub.imu.reset_heading(-90)
     await Ruta_6_llevar_ladrillos_verdes()
     await medir_trayectos_manual()
+
 
 run_task(Run())
