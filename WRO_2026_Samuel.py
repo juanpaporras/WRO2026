@@ -21,23 +21,14 @@ class SensorLineaMBC_Diagnostico:
 
     async def actualizar_lectura(self):
         try:
-            # Leemos los datos tal como indica el tutorial
-            # Asegúrate de recibir los 9 bytes
             data = await self.dispositivo.read(9)
             
             if len(data) >= 7:
-                # Extraemos data5 (que es el índice 4 si la lista empieza en 0)
-                # Basado en la imagen, el dato clave es data5
-                d5 = (data[4] << 8) | data[5] # Combinamos bytes si es necesario, 
-                                              # o usa la estructura que tu driver ya tiene.
-                
-                # SIGUIENDO EXACTAMENTE LA LÓGICA DE LA IMAGEN:
-                # La imagen muestra data5 como el contenedor de error y ancho
+                d5 = (data[4] << 8) | data[5] 
+
                 self.error_espacial = float((data[4] & 0xFF) - 8)
-                self.ancho_linea = float((data[4] >> 8) & 0xFF) # <--- AQUÍ ESTÁ EL ANCHO CORRECTO
+                self.ancho_linea = float((data[4] >> 8) & 0xFF) 
                 
-                # Si esto no te da el valor correcto, prueba usando data[5] en lugar de data[4]
-                # dependiendo de cómo Pybricks entrega la lista de bytes.
             else:
                 print("Trama corta:", data)
         except Exception as e:
@@ -81,12 +72,14 @@ async def advertencia_bateria():
     voltaje= ( hub.battery.voltage() / 1000.0 )
     print (voltaje)
 
-    if float(voltaje) <= 7.87 or voltaje > 8.3:
+    if float(voltaje) <= 7.9 or voltaje > 8.3:
         await sonido_advertencia()  
         while voltaje>8.3:
             left_motor.dc(50)
             right_motor.dc(50)  
             voltaje= ( hub.battery.voltage() / 1000.0 )
+            print(hub.battery.voltage() / 1000.0)
+            await wait(1000)
         await boton()
 
 async def boton():
@@ -197,7 +190,7 @@ async def getBlackLineWidth():
     # Retorna un valor entero de 0 a 8
     return sensor_mbc.ancho_linea
 
-async def seguir_linea_distancia(distancia_mm, target_heading_calibracion=None, potencia_crucero=85, potencia_inicial=40, accel_rate=1.1, potencia_final=40, decel_rate=1.3, kp_base=2.0, kd_base=0.5, ki_base=0, accel_deadband=2):
+async def seguir_linea_distancia(distancia_mm, target_heading_calibracion=None, potencia_crucero=85, potencia_inicial=35, accel_rate=1.1, potencia_final=40, decel_rate=1.3, kp_base=2.0, kd_base=0.5, ki_base=0, accel_deadband=2):
 
     diametro_rueda = 62.5  
     grados_objetivo = (distancia_mm * 360) / (math.pi * diametro_rueda)
@@ -208,7 +201,7 @@ async def seguir_linea_distancia(distancia_mm, target_heading_calibracion=None, 
     
     integral_acumulada = 0.0
     last_error = 0.0  
-    error_deadband = 0.1
+    error_deadband = 0.9
     LIMITE_INTEGRAL = 30.0 
     
     derivada_filtrada = 0.0
@@ -290,7 +283,7 @@ async def seguir_linea_distancia(distancia_mm, target_heading_calibracion=None, 
         kd_dinamico = kd_base
         ki_dinamico = ki_base
         
-        if potencia_actual > 0.7 * potencia_crucero:
+        if potencia_actual > 0.9 * potencia_crucero:
             kp_dinamico = kp_base * 0.5
             kd_dinamico = kd_base * 0.5
             
@@ -315,7 +308,7 @@ async def seguir_linea_distancia(distancia_mm, target_heading_calibracion=None, 
     left_motor.hold()
     right_motor.hold()
 
-async def seguir_linea_hasta_interseccion(lado="centro", potencia_crucero=45, potencia_inicial=30, accel_rate=1.5, kp_base=2.0, kd_base=0.4, ki_base=0.0, umbral_interseccion=8):
+async def seguir_linea_hasta_interseccion(lado="centro", potencia_crucero=55, potencia_inicial=30, accel_rate=1.5, kp_base=2.0, kd_base=0.4, ki_base=0.0, umbral_interseccion=8):
 
     last_error = 0.0
     integral_acumulada = 0.0
@@ -413,14 +406,14 @@ async def motor_dc_por_segundos(motor, milisegundos, potencia):
     motor.brake()
 
 async def subir_elevador_todo():
-    await motor_dc_por_segundos(motorElevador, 500, 80)
+    await motor_dc_por_segundos(motorElevador, 600, 90)
 
 async def subir_elevador():
     await motor_dc_por_grados(motorElevador, 200, 100)
     motorElevador.hold
 
 async def bajar_elevador():
-    await motor_dc_por_segundos(motorElevador, 1000, -100)
+    await motor_dc_por_segundos(motorElevador, 1000, -60)
 
 async def bajar_cuadro():
     await motor_dc_por_grados(motorcuadro, 420, 80)
@@ -432,32 +425,33 @@ async def cerrar_cuadro():
     await motor_dc_por_segundos(motorcuadro, 600, 100)
 
 async def abrir_garra():
-    await motor_dc_por_segundos(motorgarras, 1500, 100)
+    await motor_dc_por_grados(motorgarras, 160, 100)
+
+async def abrir_garra_todo():
+    await motor_dc_por_segundos(motorgarras, 1000, 100)
 
 async def cerrar_garra():
     motorgarras.dc(-100)
 
 async def cerrar_garra_poquito():
-    await motor_dc_por_grados(motorgarras, 50, 50)
+    await motor_dc_por_grados(motorgarras, -50, 50)
 
 async def dejar_bloques ():
     await wait(300)
     #bajar la garra hasta el mosaico
-    await motor_dc_por_grados(motorElevador, -123, 70)
+    await motor_dc_por_grados(motorElevador, -50, 70)
     #abrir toda la garra despacio
-    await motor_dc_por_grados(motorgarras, 100, 80)
-    await motor_dc_por_segundos(motorgarras, 500, 80)
+    await motor_dc_por_grados(motorgarras, 175, 100)
     await cerrar_garra_poquito()
     await subir_elevador_todo()
     #cerrar garra para majar
-    await motor_dc_por_grados(motorgarras, 135, -50)
+    await motor_dc_por_grados(motorgarras, -100, 50)
     # baja para majar
-    await motor_dc_por_segundos(motorElevador, 500, -80)
+    await motor_dc_por_segundos(motorElevador, 500, -70)
     await subir_elevador_todo()
     #cerrar garra para majar
     await motor_dc_por_segundos(motorgarras, 500, -80)
-    # baja para majar
-    await motor_dc_por_segundos(motorElevador, 500, 80)
+    await motor_dc_por_segundos(motorElevador, 500, -70)
     await subir_elevador_todo()
 
 async def dejar_bloques_2 (heading):
@@ -476,7 +470,7 @@ async def montarse_linea (heading):
     await avance_gyro(heading,60,30,25,50,25,2)
 
 async def Ruta_1_recoger_bloques ():
-        await multitask (avance_gyro (0,365,240),bajar_elevador())
+        await multitask (avance_gyro (0,365,240,max_speed=65,reset_gyro=True),bajar_elevador())
         await cerrar_garra()
         await wait(800)
         await subir_elevador()
@@ -487,41 +481,42 @@ async def Ruta_2_recoger_ladrillos_blancos():
         await multitask(avance_gyro (90,250,200), bajar_cuadro())
         await multitask (seguir_linea_distancia (1350), cerrar_cuadro())
         await seguir_linea_hasta_interseccion ()
-        await subir_cuadro()
-        await giro_pivot(154,False)
-        await giro_pivot(90)
+        await multitask (giro_pivot(154,False,"medio"),subir_cuadro())
+        await giro_pivot(90,tipo_carga="medio")
         await giro(-90)
         await bajar_cuadro()
-        await retrocede_gyro(-90,290,200)
+        await retrocede_gyro(-90,1000,200,stall_stop=True,max_speed=50)
+        await avance_gyro(-90,40,20)
         await cerrar_cuadro ()
 
-async def Ruta_3_llevar_ladrillos_blancos():
+async def Ruta_3_llevar_ladrillos_blancos(angulo_giro):
     await seguir_linea_hasta_interseccion("derecha")
     await montarse_linea(-90)
     await giro(0)
     await seguir_linea_hasta_interseccion("derecha")
-    await giro (132)
+    await giro (angulo_giro,"medio")
     await wait(100)
-    await retrocede_gyro (132,1262,1050)
-    await giro_pivot (90,False)
+    await retrocede_gyro (angulo_giro,1262,1050)
+    await giro_pivot (90,False,"pesado")
     await subir_cuadro()
     
-async def Ruta_4_llevar_bloques_1():
-    await giro_pivot (132,False)
-    await avance_gyro (132,465,250)
+async def Ruta_4_recoger_verdes():
+    await giro_pivot (131,False,"pesado")
+    await avance_gyro (131,465,250)
     await giro(90)
     await seguir_linea_distancia(350)
     await giro(-90)
     await bajar_cuadro()
-    await retrocede_gyro(-90,315,250)
-    await boton()
+    await retrocede_gyro(-90,1000,200,stall_stop=True,max_speed=50)
+    await avance_gyro(-90,40,20)
     await cerrar_cuadro()
 
-async def Ruta_5_recoger_verdes():
-    await seguir_linea_distancia(450,accel_deadband=1,potencia_crucero=70)
+async def Ruta_5_llevar_bloques():
+    await seguir_linea_distancia(450,potencia_crucero=70)
     await seguir_linea_hasta_interseccion()
     heading_temporal=hub.imu.heading()
     await avance_gyro(heading_temporal,10000,1000,stall_stop=True,max_speed=55)
+    hub.imu.reset_heading(-90)
 
 async def Ruta_6_llevar_ladrillos_verdes():
     await retrocede_gyro(-90,600,400)
@@ -538,24 +533,91 @@ async def Ruta_7_recoger_ladrillos_amarillos():
     await montarse_linea(0)
     await giro(-90)
     await bajar_cuadro()
-    await retrocede_gyro(-90,335,250)
+    await retrocede_gyro(-90,1000,200,stall_stop=True,max_speed=50)
+    await avance_gyro(-90,40,20)
     await cerrar_cuadro()
 
-async def Run():
-    await advertencia_bateria()
-    hub.imu.reset_heading(0)
-    await giro_pivot(90,reset_gyro=True)
-    await wait(100)
-    await giro_pivot(180)
+async def Ruta_8_llevar_ladrillos_amarillos():
+    await seguir_linea_hasta_interseccion("izquierda")
+    await montarse_linea(-90)
+    await giro(180)
+    await seguir_linea_distancia(450)
+    await seguir_linea_hasta_interseccion("derecha")
+    await montarse_linea(180)
+    await giro(-90)
+    await seguir_linea_distancia(300)
+    await seguir_linea_hasta_interseccion()
+    await montarse_linea(-90)
+    await giro(180)
+    await retrocede_gyro(180,180,180)
+    await subir_cuadro()
+    await retrocede_gyro(180,40,20)   
+
+async def Ruta_9_Recoger_y_llevar_YACUZY():
+    await seguir_linea_hasta_interseccion()
+    await giro(0,"medio")
+    await bajar_cuadro()
+    await retrocede_gyro(0,140,100)
+    await cerrar_cuadro()
+    await seguir_linea_hasta_interseccion()
+    await montarse_linea(0)
+    await giro(90,"medio")
+    await seguir_linea_distancia(450)
+    await giro_pivot(-5,True,"pesado")
+    await giro_pivot(90,False,tipo_carga="pesado",min_speed=50)
+    await subir_cuadro()
+
+async def Ruta_10_recoger_ladrillos_azules():
+    await avance_gyro(90,140,100)
+    await multitask (giro(-90), bajar_cuadro())
+    await retrocede_gyro(-90,1000,200,stall_stop=True,max_speed=50)
+    await avance_gyro(-90,40,20)
+    await cerrar_cuadro()
+
+async def Ruta_11_Recoger_pala():
+
+    await seguir_linea_hasta_interseccion()
+    await montarse_linea(-90)
+    await giro(180)
+    await seguir_linea_hasta_interseccion("izquierda")
+    await avance_gyro(180,30,15,30,50,25,2)
+    await montarse_linea(180)
+    await giro_pivot(-90,False,"pesado")
+    await multitask(avance_gyro(-90,450,300), abrir_garra())
+    await motor_dc_por_segundos(motorElevador, 600, -30)
+    await cerrar_garra()
     await wait(1000)
-    await giro_pivot(0)
-    print(obtener_heading_normalizado())
+    await motor_dc_por_grados(motorElevador, 80, 100)
+    await avance_gyro(-90,1430,1100,stall_stop=True)
 
+async def Ruta_12_llevar_pala():
+    await giro_pivot(-125,False)
+    await retrocede_gyro(-125,500,300)
+    await giro(-90)
+    await seguir_linea_distancia(350)
+    await seguir_linea_hasta_interseccion()
+    await giro(-116)
+    await multitask (abrir_garra(),subir_elevador())
 
+async def Ruta_13_recoger_bloques_2():
+    await retrocede_gyro(-116,650,400)
+    await boton()
+    await giro(0)
+    await seguir_linea_hasta_interseccion("izquierda")
+    await montarse_linea(0)
+    await giro(-90)
+    await seguir_linea_hasta_interseccion()
+    await avance_gyro(-90,287,100)
+    await giro(0)
+    await bajar_elevador()
+    await avance_gyro(0,120,60)
+    await cerrar_garra()
+    await wait(800)
+    await subir_elevador()
 
+#Inicio del Run
 
-
-
+async def Run():
     await advertencia_bateria()
     await subir_elevador_todo()
     await subir_cuadro()
@@ -564,12 +626,18 @@ async def Run():
     await wait(200)
     await Ruta_1_recoger_bloques()
     await Ruta_2_recoger_ladrillos_blancos()
-    await Ruta_3_llevar_ladrillos_blancos()
-    await Ruta_4_llevar_bloques_1()
-    await Ruta_5_recoger_verdes ()
+    await Ruta_3_llevar_ladrillos_blancos(131)
+    await Ruta_4_recoger_verdes()
+    await Ruta_5_llevar_bloques()
     await dejar_bloques()
-    hub.imu.reset_heading(-90)
     await Ruta_6_llevar_ladrillos_verdes()
+    await Ruta_7_recoger_ladrillos_amarillos()
+    await Ruta_8_llevar_ladrillos_amarillos()
+    await Ruta_9_Recoger_y_llevar_YACUZY()
+    await Ruta_10_recoger_ladrillos_azules()
+    await Ruta_11_Recoger_pala ()
+    await Ruta_12_llevar_pala()
+    await Ruta_13_recoger_bloques_2()
     await medir_trayectos_manual()
 
 

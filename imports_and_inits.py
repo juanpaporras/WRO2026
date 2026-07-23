@@ -231,12 +231,8 @@ async def retrocede_gyro(target_heading, final_angle, decel_start_angle, start_s
     left_motor.hold()
     right_motor.hold()
 
-
 async def giro(target_heading, tipo_carga="vacio", reset_gyro=False, max_speed=None, min_speed=None, accel_rate=1.5, decel_angle=None):
-    """
-    Ejecuta un giro diferencial de alta precisión con soporte para escenarios de carga (WRO 2026).
-    """
-    # Configuración de ganancias y límites según el escenario de carga[cite: 2]
+
     if tipo_carga == "pesado":
         max_speed = 60 if max_speed is None else max_speed
         min_speed = 40 if min_speed is None else min_speed
@@ -371,14 +367,10 @@ async def giro(target_heading, tipo_carga="vacio", reset_gyro=False, max_speed=N
     right_motor.hold()
     await hub.speaker.beep(1000, 50)
 
-
 async def giro_pivot(target_heading, pivote_izquierdo=True, tipo_carga="vacio", reset_gyro=False, max_speed=None, min_speed=None, accel_rate=1.5, decel_angle=None):
-    """
-    Ejecuta un giro con pivot de alta precisión con soporte para escenarios de carga (WRO 2026).
-    """
-    # Configuración de ganancias y límites según el escenario de carga[cite: 2]
+    
     if tipo_carga == "pesado":
-        max_speed = 60 if max_speed is None else max_speed
+        max_speed = 100 if max_speed is None else max_speed
         min_speed = 40 if min_speed is None else min_speed
         decel_angle = 70.0 if decel_angle is None else decel_angle
         kp = 3.0
@@ -387,7 +379,7 @@ async def giro_pivot(target_heading, pivote_izquierdo=True, tipo_carga="vacio", 
         zona_integral = 12.0
         limite_integral = 15.0
     elif tipo_carga == "medio":
-        max_speed = 70 if max_speed is None else max_speed
+        max_speed = 100 if max_speed is None else max_speed
         min_speed = 35 if min_speed is None else min_speed
         decel_angle = 60.0 if decel_angle is None else decel_angle
         kp = 3.1
@@ -396,7 +388,7 @@ async def giro_pivot(target_heading, pivote_izquierdo=True, tipo_carga="vacio", 
         zona_integral = 11.0
         limite_integral = 15.0
     else:  # "vacio"
-        max_speed = 75 if max_speed is None else max_speed
+        max_speed = 100 if max_speed is None else max_speed
         min_speed = 32 if min_speed is None else min_speed
         decel_angle = 50.0 if decel_angle is None else decel_angle
         kp = 3.2
@@ -519,6 +511,7 @@ async def giro_pivot(target_heading, pivote_izquierdo=True, tipo_carga="vacio", 
     left_motor.hold()
     right_motor.hold()
     await hub.speaker.beep(1000, 50)
+
 async def avance_hasta_linea(target_heading, start_speed=40, max_speed=50, accel_rate=1.2, stall_stop=False):
     kp_base = 5
     ki_base = 0.001
