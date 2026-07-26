@@ -552,12 +552,13 @@ async def Ruta_13_recoger_bloques_2():
 # Inicio del Run
 async def Run():
     await advertencia_bateria()
+    await subir_cuadro()
+    await subir_elevador_todo()
+    await boton()
     hub.imu.reset_heading(0)
     await wait(10)
     hub.imu.reset_heading(0)
     await wait(200)
-    await giro_arco(300,180)
-    await boton()
     await Ruta_1_recoger_bloques()
     await Ruta_2_recoger_ladrillos_blancos()
     await Ruta_3_llevar_ladrillos_blancos(131)

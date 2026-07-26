@@ -10,15 +10,13 @@ class Robot:
     def __init__(self):
         self.hub = PrimeHub()
         
-        # Inversión de giros según el ensamble del robot
         self.left_motor = Motor(Port.F, Direction.COUNTERCLOCKWISE)
         self.right_motor = Motor(Port.B, Direction.CLOCKWISE)
-        
-        # Parámetros geométricos de la base motriz (en milímetros)
+      
         DIAMETRO_RUEDA = 62.5
-        DISTANCIA_EJES =152.2  # L_teórico: Debe ajustarse con la prueba empírica
+        DISTANCIA_EJES =152.2
         
-        # Inicialización del núcleo cinemático en C
+    
         self.drive_base = DriveBase(
             self.left_motor, 
             self.right_motor, 
@@ -26,17 +24,15 @@ class Robot:
             axle_track=DISTANCIA_EJES
         )
         
-        # Perfiles trapezoidales: straight_speed, straight_acceleration, turn_rate, turn_acceleration
-        # En subdyk.py, dentro de tu clase Robot:
+    
 
         self.drive_base.settings(
-            straight_speed=450,         # Límite físico nominal bajo carga (aprox 130-140 RPM)
-            straight_acceleration=450, # Aceleración sumamente agresiva, alcanza vel max en ~0.37s
-            turn_rate=350,              # Giros veloces sin inducir derrape centrífugo excesivo
-            turn_acceleration=800       # Rampa rápida para acoplamiento de giros pivotados
+            straight_speed=450,         
+            straight_acceleration=450, 
+            turn_rate=350,            
+            turn_acceleration=800      
         )
         
-        # Activación de la compensación de rumbo (Fusión Sensorial con el IMU interno)
         self.drive_base.use_gyro(True)
         
         self.stopwatch = StopWatch()
