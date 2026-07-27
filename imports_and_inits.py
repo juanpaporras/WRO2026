@@ -6,31 +6,76 @@ from pybricks.tools import wait, StopWatch
 import math
 from pybricks.iodevices import PUPDevice
 
+
 class SensorLineaMBC_Diagnostico:
     def __init__(self, puerto: Port):
         self.dispositivo = PUPDevice(puerto)
         self.error_espacial = 0.0
         self.ancho_linea = 0.0
-        print("INFO DEL SENSOR:", self.dispositivo.info())
+        self.valores_individuales = [0] * 8  
 
     async def actualizar_lectura(self):
         try:
             data = await self.dispositivo.read(9)
-            if len(data) >= 7:
-                d5 = (data[4] << 8) | data[5] 
+            
+            if len(data) >= 5:
+                luces = []
+                for i in range(4):
+                    luces.append(data[i] & 0xFF)         
+                    luces.append((data[i] >> 8) & 0xFF)  
+                
+                self.valores_individuales = luces
+                
                 self.error_espacial = float((data[4] & 0xFF) - 8)
                 self.ancho_linea = float((data[4] >> 8) & 0xFF) 
-            else:
-                print("Trama corta:", data)
-        except Exception as e:
-            print("ERROR:", e)
+                
+        except Exception:
+            pass 
+
+    def es_negro_puro(self, umbral_max=12, sensores_centro=[3, 4]):
+        for i in sensores_centro:
+            if self.valores_individuales[i] > umbral_max:
+                return False
+        return True
+
 
 sensor_mbc = SensorLineaMBC_Diagnostico(Port.D)
-
 robot = get_robot()
 hub = robot.hub
 left_motor = robot.left_motor
 right_motor = robot.right_motor
+
+
+async def diagnostico_espectral_mbc():
+    """
+    Función de muestreo continuo para calibrar umbrales de reflectancia.
+    Imprime el arreglo de los 8 fotodetectores y aísla los valores centrales.
+    """
+    print("==================================================")
+    print(" INICIO DE MUESTREO: DIAGNÓSTICO ESPECTRAL MBC ")
+    print("==================================================")
+    print("Instrucciones: Desplaza el robot manualmente sobre la pista.")
+    print("Observa los valores en verde, azul y negro puro.")
+    
+    while True:
+        # 1. Actualizar las lecturas desde el microcontrolador del sensor
+        await sensor_mbc.actualizar_lectura()
+        
+        # 2. Extraer la matriz de reflectancia (valores de 0 a 100)
+        arreglo_luces = sensor_mbc.valores_individuales
+        
+        # 3. Formatear y aislar los fotodetectores centrales (índices 3 y 4)
+        if len(arreglo_luces) == 8:
+            centro_izq = arreglo_luces[3]
+            centro_der = arreglo_luces[4]
+            
+            # Se imprime la matriz completa y se destacan los canales de interés
+            print(f"RAW [0-7]: {arreglo_luces} | Centro (3,4): [{centro_izq}, {centro_der}]")
+        else:
+            print("Esperando trama de datos válida...")
+            
+        # 4. Retardo para estabilizar la lectura en consola
+        await wait(250)
 
 async def obtener_error_lpf2():
     await sensor_mbc.actualizar_lectura()
@@ -236,7 +281,7 @@ async def giro_arco(radio_mm, angulo_giro=90, velocidad_crucero=400):
     right_motor.hold()
     await hub.speaker.beep(1000, 50)
 
-async def avance_hasta_linea(target_heading, stall_stop=False):
+async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectancia=12):
     heading_actual = hub.imu.heading()
     diferencia = (target_heading - heading_actual) % 360
     if diferencia > 180:
@@ -249,12 +294,23 @@ async def avance_hasta_linea(target_heading, stall_stop=False):
             
     robot.drive_base.straight(2000, wait=False)
     
+    # Filtro anti-ruido (requiere 2 lecturas consecutivas para frenar)
+    lecturas_negras_consecutivas = 0
+    
     while not robot.drive_base.done():
-        error_mbc = await obtener_error_lpf2()
+        # Actualizamos la geometría y la reflectancia al mismo tiempo
+        await sensor_mbc.actualizar_lectura()
         
-        if abs(error_mbc) < 6:
-            robot.drive_base.stop()
-            break
+        error_mbc = sensor_mbc.error_espacial
+        
+        # Filtro Riguroso: Está centrado Y el color es definitivamente negro
+        if abs(error_mbc) < 6 and sensor_mbc.es_negro_puro(umbral_max=umbral_reflectancia):
+            lecturas_negras_consecutivas += 1
+            if lecturas_negras_consecutivas >= 2:
+                robot.drive_base.stop()
+                break
+        else:
+            lecturas_negras_consecutivas = 0
             
         if stall_stop and robot.drive_base.stalled():
             robot.drive_base.stop()

@@ -3,16 +3,14 @@ from pybricks.parameters import Port, Button
 from pybricks.tools import wait, StopWatch, run_task, multitask
 import math
 
-# Importamos la instancia del robot y todas las funciones de cinemática optimizadas
 from subdyk import get_robot
 from imports_and_inits import (
     avance_gyro, avance_hasta_linea, retrocede_gyro, 
     left_motor, right_motor, giro, giro_pivot, 
     retrocede_hasta_linea_gyro, sensor_mbc, obtener_error_lpf2,
-    giro_arco
+    giro_arco, diagnostico_espectral_mbc
 )
 
-# Inicialización de hardware superior (Actuadores del Efector Final)
 robot = get_robot()
 hub = robot.hub
 stopwatch = robot.stopwatch
@@ -21,6 +19,16 @@ motorgarras = Motor(Port.C)
 motorElevador = Motor(Port.E)
 motorcuadro = Motor(Port.A)
 heading_temporal = 0
+
+def configurar_actuador(motor):
+    
+    motor.control.limits(speed=1000, acceleration=2000, torque=None)
+    
+    motor.control.pid(kp=500, ki=10, kd=100)
+
+configurar_actuador(motorElevador)
+
+configurar_actuador(motorcuadro)
 
 def obtener_heading_normalizado():
     raw_heading = float(hub.imu.heading())
@@ -154,199 +162,223 @@ async def getBlackLineWidth():
 # ---------------------------------------------------------
 # FUNCIONES DE SEGUIMIENTO ÓPTICO (Mantienen lazo en Python)
 # ---------------------------------------------------------
-async def seguir_linea_distancia(distancia_mm, target_heading_calibracion=None, potencia_crucero=85, potencia_inicial=35, accel_rate=1.1, potencia_final=40, decel_rate=1.3, kp_base=2.0, kd_base=0.5, ki_base=0, accel_deadband=2):
-    diametro_rueda = 62.5  
-    grados_objetivo = (distancia_mm * 360) / (math.pi * diametro_rueda)
-
-    left_motor.reset_angle(0)
-    right_motor.reset_angle(0)
+# ---------------------------------------------------------
+# FUNCIONES DE SEGUIMIENTO ÓPTICO (Mantienen lazo en Python)
+# ---------------------------------------------------------
+# ---------------------------------------------------------
+# FUNCIONES DE SEGUIMIENTO ÓPTICO (Mantienen lazo en Python)
+# ---------------------------------------------------------
+# NOTA: Parámetros base reducidos para un inicio de sintonización suave
+async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=380, accel_dist_mm=100, decel_dist_mm=100, vel_minima_mm_s=80, kp=6.0, kd=2, ki=0.0,freno=True):
+    # 1. Obtenemos la posición inicial usando la odometría del DriveBase
+    start_dist = robot.drive_base.distance()
     cronometro = StopWatch()
     
-    integral_acumulada = 0.0
-    last_error = 0.0  
-    error_deadband = 0.9
-    LIMITE_INTEGRAL = 30.0 
+    # 2. Variables del controlador PID
+    last_t = cronometro.time() / 1000.0
+    last_error = 0.0
+    integral = 0.0
     derivada_filtrada = 0.0
-    ALFA_FILTRO = 0.25 
+    alfa_filtro = 0.35 # Constante para el filtro pasa-bajos
+    LIMITE_INTEGRAL = 30.0
     
-    lecturas_paralelo = 0
-    gyro_calibrado = False
-    UMBRAL_CENTRO = 0.5    
-    UMBRAL_DERIVADA = 1.0  
-    CICLOS_CAPTURA = 25    
-    CICLOS_CONFIRMACION = 35 
-    heading_capturado = 0.0
+    # Límite de seguridad para evitar volantazos violentos
+    MAX_TURN_RATE = 60.0 
     
-    potencia_actual = abs(potencia_inicial)
-    potencia_crucero = min(abs(potencia_crucero), 100)
-    potencia_final = min(abs(potencia_final), potencia_crucero)
-    
-    pasos_desaceleracion = (potencia_crucero - potencia_final) / decel_rate
-    grados_desaceleracion_estimados = pasos_desaceleracion * 5  
-    grados_inicio_desaceleracion = max(0, grados_objetivo - grados_desaceleracion_estimados)
-
-    cronometro.reset()
-
     while True:
-        grados_recorridos = (abs(left_motor.angle()) + abs(right_motor.angle())) / 2.0
+        # 3. Odometría: Distancia real recorrida
+        dist_actual = robot.drive_base.distance() - start_dist
         
-        if grados_recorridos >= grados_objetivo:
-            break
-
-        dt = cronometro.time() / 1000.0
-        cronometro.reset()
-        if dt <= 0.0: dt = 0.001 
-
-        error = await obtener_error_lpf2()
-        derivada_cruda = (error - last_error) / dt
-        derivada_filtrada = (derivada_filtrada * (1.0 - ALFA_FILTRO)) + (derivada_cruda * ALFA_FILTRO)
-
-        if target_heading_calibracion is not None and not gyro_calibrado:
-            if abs(error) < UMBRAL_CENTRO and abs(derivada_filtrada) < UMBRAL_DERIVADA:
-                lecturas_paralelo += 1
-                if lecturas_paralelo == CICLOS_CAPTURA:
-                    heading_capturado = hub.imu.heading()
-                elif lecturas_paralelo >= CICLOS_CONFIRMACION:
-                    delta_movimiento = hub.imu.heading() - heading_capturado
-                    nuevo_heading = target_heading_calibracion + delta_movimiento
-                    hub.imu.reset_heading(nuevo_heading)
-                    gyro_calibrado = True 
-                lecturas_paralelo = 0 
-        
-        if grados_recorridos >= grados_inicio_desaceleracion:
-            if potencia_actual > potencia_final:
-                potencia_actual -= decel_rate
-                potencia_actual = max(potencia_actual, potencia_final)
-        else:
-            if abs(error) < accel_deadband and potencia_actual < potencia_crucero:
-                potencia_actual += accel_rate
-                potencia_actual = min(potencia_actual, potencia_crucero)
-        
-        if abs(error) <= error_deadband:
-            error = 0.0
+        if dist_actual >= distancia_mm:
+            break # Llegamos exactamente a la meta
             
+        # 4. Perfil de Velocidad Trapezoidal Espacial
+        dist_faltante = distancia_mm - dist_actual
+        
+        if dist_actual < accel_dist_mm:
+            # Fase de aceleración
+            escala = dist_actual / accel_dist_mm
+            vel_lineal = vel_minima_mm_s + (vel_crucero_mm_s - vel_minima_mm_s) * escala
+        elif dist_faltante < decel_dist_mm and not freno:
+            # Fase de desaceleración 
+            escala = dist_faltante / decel_dist_mm
+            vel_lineal = vel_minima_mm_s + (vel_crucero_mm_s - vel_minima_mm_s) * escala
+        else:
+            vel_lineal = vel_crucero_mm_s
+            
+        # 5. Lectura Síncrona y Cálculo de dt real
+        t_now = cronometro.time() / 1000.0
+        dt = t_now - last_t
+        if dt <= 0.001: dt = 0.001 
+        last_t = t_now
+        
+        error = await obtener_error_lpf2()
+        
+        # 6. Cálculo del PID (Salida en GRADOS/SEGUNDO de giro)
         P = error
-        integral_acumulada += error * dt
-        integral_acumulada = max(min(integral_acumulada, LIMITE_INTEGRAL), -LIMITE_INTEGRAL)
-        I = integral_acumulada
+        
+        integral += error * dt
+        integral = max(min(integral, LIMITE_INTEGRAL), -LIMITE_INTEGRAL)
+        I = integral
+        
+        derivada_cruda = (error - last_error) / dt
+        derivada_filtrada = (derivada_filtrada * (1.0 - alfa_filtro)) + (derivada_cruda * alfa_filtro)
         D = derivada_filtrada
         
-        kp_dinamico = kp_base
-        kd_dinamico = kd_base
-        ki_dinamico = ki_base
-        
-        if potencia_actual > 0.9 * potencia_crucero:
-            kp_dinamico = kp_base * 0.5
-            kd_dinamico = kd_base * 0.5
+        # Zona muerta mecánica: Evita que los motores "tiemblen" en rectas perfectas
+        if abs(error) <= 0.1:
+            error = 0.0
             
-        turn = (kp_dinamico * P) + (ki_dinamico * I) + (kd_dinamico * D)
-        limite_turn = potencia_actual * 0.65 
-        turn_clamped = max(min(turn, limite_turn), -limite_turn)
-
-        if abs(error) < error_deadband:
-            turn_clamped = 0.0
+        # Cálculo del giro con el signo correcto
+        turn_rate = -((kp * P) + (ki * I) + (kd * D))
         
-        left_motor.dc(potencia_actual - turn_clamped)
-        right_motor.dc(potencia_actual + turn_clamped)
+        # SATURACIÓN: Clamp para proteger la estabilidad inercial
+        turn_rate = max(min(turn_rate, MAX_TURN_RATE), -MAX_TURN_RATE)
+        
+        # 7. Ejecución Cinemática Continua
+        robot.drive_base.drive(vel_lineal, turn_rate)
+        
         last_error = error
         await wait(10)
 
-    left_motor.hold()
-    right_motor.hold()
+    # 8. Frenado activo y preciso
+    if freno:
+        robot.drive_base.stop()
+        await wait(50) 
 
-async def seguir_linea_hasta_interseccion(lado="centro", potencia_crucero=55, potencia_inicial=30, accel_rate=1.5, kp_base=2.0, kd_base=0.4, ki_base=0.0, umbral_interseccion=8):
-    last_error = 0.0
-    integral_acumulada = 0.0
-    derivada_filtrada = 0.0
-    ALFA_FILTRO = 0.25 
-    LIMITE_INTEGRAL = 30.0
-    error_deadband = 0.9
-    
-    potencia_actual = abs(potencia_inicial)
+async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=360, kp=6.0, kd=2.0, ki=0.0, umbral_interseccion=8, centrado_estricto=False, target_heading=None):
+    # STREAMING_CHUNK: Inicializando variables de lazo
     cronometro = StopWatch()
+    last_t = cronometro.time() / 1000.0
+    last_error = 0.0
+    integral = 0.0
+    derivada_filtrada = 0.0
+    alfa_filtro = 0.35
+    LIMITE_INTEGRAL = 30.0
+    MAX_TURN_RATE = 60.0
     
-    if lado == "izquierda": setpoint = -5.0 
-    elif lado == "derecha": setpoint = 5.0  
+    if lado == "izquierda":
+        setpoint = -5.0
+        vel_crucero_mm_s=300
+        kd=3.0 
+    elif lado == "derecha": 
+        setpoint = 5.0 
+        vel_crucero_mm_s=300
+        kd=3.0  
     else: setpoint = 0.0  
         
-    lecturas_interseccion_consecutivas = 0
-    lecturas_requeridas = 1 
-    cronometro.reset()
+    lecturas_interseccion = 0
     
+    # STREAMING_CHUNK: Bucle principal de búsqueda
     while True:
-        dt = cronometro.time() / 1000.0
-        cronometro.reset()
-        if dt <= 0.0: dt = 0.001
-
         ancho_linea = await getBlackLineWidth()
         if ancho_linea >= umbral_interseccion:
-            lecturas_interseccion_consecutivas += 1
-            if lecturas_interseccion_consecutivas >= lecturas_requeridas:
+            lecturas_interseccion += 1
+            if lecturas_interseccion >= 2:
                 break 
         else:
-            lecturas_interseccion_consecutivas = 0 
-        
-        if potencia_actual < potencia_crucero: potencia_actual += accel_rate
-        if potencia_actual > potencia_crucero: potencia_actual = potencia_crucero
+            lecturas_interseccion = 0 
             
-        posicion_actual = await obtener_error_lpf2() 
-        error = posicion_actual - setpoint
+        t_now = cronometro.time() / 1000.0
+        dt = t_now - last_t
+        if dt <= 0.001: dt = 0.001
+        last_t = t_now
+            
+        error = (await obtener_error_lpf2()) - setpoint
         
-        if abs(error) <= error_deadband:
+        if abs(error) <= 1.2:
             error = 0.0
-        else:
-            error = error - (error_deadband * (error / abs(error)))    
             
         P = error
-        integral_acumulada += error * dt
-        integral_acumulada = max(min(integral_acumulada, LIMITE_INTEGRAL), -LIMITE_INTEGRAL)
-        I = integral_acumulada
+        integral += error * dt
+        integral = max(min(integral, LIMITE_INTEGRAL), -LIMITE_INTEGRAL)
+        I = integral
 
         derivada_cruda = (error - last_error) / dt
-        derivada_filtrada = (derivada_filtrada * (1.0 - ALFA_FILTRO)) + (derivada_cruda * ALFA_FILTRO)
+        derivada_filtrada = (derivada_filtrada * (1.0 - alfa_filtro)) + (derivada_cruda * alfa_filtro)
         D = derivada_filtrada
         
-        turn = (kp_base * P) + (ki_base * I) + (kd_base * D)
-        limite_turn = potencia_actual * 0.65
-        turn_clamped = max(min(turn, limite_turn), -limite_turn)
+        turn_rate = -((kp * P) + (ki * I) + (kd * D))
+        turn_rate = max(min(turn_rate, MAX_TURN_RATE), -MAX_TURN_RATE)
 
-        left_motor.dc(potencia_actual - turn_clamped)
-        right_motor.dc(potencia_actual + turn_clamped)
+        robot.drive_base.drive(vel_crucero_mm_s, turn_rate)
         
         last_error = error
         await wait(10)
         
-    left_motor.hold()
-    right_motor.hold()
+    # STREAMING_CHUNK: Parada inicial y absorción de inercia
+    robot.drive_base.stop()
+    await wait(150) 
+    
+    # STREAMING_CHUNK: Rutina de Centrado y Alineación (Dos Fases)
+    if centrado_estricto:
+        
+        # --- FASE 1: Retroceso al Eje X (Línea) ---
+        # Si no se provee un target, guardamos el rumbo actual para no desviarnos más
+        heading_lock = target_heading if target_heading is not None else hub.imu.heading()
+        
+        while True:
+            ancho_actual = await getBlackLineWidth()
+            if ancho_actual >= umbral_interseccion:
+                break 
+                
+            error_yaw = heading_lock - hub.imu.heading()
+            error_yaw = ((error_yaw + 180) % 360) - 180
+            
+            # Retrocedemos inyectando un micro-corrector de rumbo
+            robot.drive_base.drive(-60, error_yaw * 2.5) 
+            await wait(10)
+            
+        robot.drive_base.stop()
+        await wait(100) # Dejar asentar el chasis antes del giro
+        
+        # --- FASE 2: Corrección In Situ (Eje Theta) ---
+        # Solo giramos si nos dieron un ángulo específico
+        if target_heading is not None:
+            while True:
+                error_angular = target_heading - hub.imu.heading()
+                error_angular = ((error_angular + 180) % 360) - 180
+                
+                # Tolerancia de medio grado
+                if abs(error_angular) <= 0.5:
+                    break
+                
+                # Control Proporcional para giro en el sitio
+                # Kp = 3.5 da un giro suave que no derrapa
+                turn_rate_fino = error_angular * 3.5
+                
+                # Inyección de giro in situ (0 mm/s de velocidad lineal)
+                robot.drive_base.drive(0, turn_rate_fino)
+                await wait(10)
+                
+            robot.drive_base.stop()
+            await wait(50)
 
 # ---------------------------------------------------------
 # FUNCIONES CINEMÁTICAS DE ACTUADORES
 # ---------------------------------------------------------
 async def motor_dc_por_grados(motor, grados, potencia):
-    angulo_objetivo = motor.angle() + grados
-    if grados > 0:
-        motor.dc(abs(potencia))
-        while motor.angle() < angulo_objetivo:
-            await wait(10)
-    elif grados < 0:
-        motor.dc(-abs(potencia))
-        while motor.angle() > angulo_objetivo:
-            await wait(10)
-    motor.hold()
+  
+    velocidad = (abs(potencia) / 100.0) * 1000.0
+
+    motor.run_angle(speed=velocidad, rotation_angle=grados, wait=False)
+
+    while not motor.control.done():
+        await wait(10)
 
 async def motor_dc_por_segundos(motor, milisegundos, potencia):
-    cronometro = StopWatch()
-    motor.dc(potencia)
-    while cronometro.time() < milisegundos:
+    velocidad = (potencia / 100.0) * 1000.0
+    
+    motor.run_time(speed=velocidad, time=milisegundos, wait=False)
+    
+    while not motor.control.done():
         await wait(10)
-    motor.brake()
 
 async def subir_elevador_todo():
     await motor_dc_por_segundos(motorElevador, 600, 90)
 
 async def subir_elevador():
     await motor_dc_por_grados(motorElevador, 200, 100)
-    motorElevador.hold()
 
 async def bajar_elevador():
     await motor_dc_por_segundos(motorElevador, 1000, -60)
@@ -399,6 +431,7 @@ async def dejar_bloques_2(heading):
 
 async def montarse_linea(heading):
     await avance_gyro(heading, 60, max_speed=30)
+    await giro(heading)
 
 # ---------------------------------------------------------
 # RUTAS DE COMPETICIÓN (Máquina de Estados)
@@ -551,7 +584,16 @@ async def Ruta_13_recoger_bloques_2():
 
 # Inicio del Run
 async def Run():
-    await advertencia_bateria()
+
+    hub.imu.reset_heading(0)
+    await wait(200)
+    await avance_hasta_linea(0)
+    await diagnostico_espectral_mbc()
+    await boton()
+    await seguir_linea_distancia(300,freno=False)
+    await seguir_linea_hasta_interseccion("derecha",centrado_estricto=True, target_heading=0)
+
+    await boton()
     await subir_cuadro()
     await subir_elevador_todo()
     await boton()
