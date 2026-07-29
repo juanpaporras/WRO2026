@@ -116,11 +116,35 @@ async def avance_gyro(target_heading, final_angle, max_speed=85, stall_stop=Fals
     distancia_mm = (final_angle / 360.0) * (math.pi * 62.5)
     robot.drive_base.straight(distancia_mm, wait=False)
     
+    # --- ALGORITMO DE DETECCIÓN DE ATASCO POR TIEMPO ---
+    cronometro_stall = StopWatch()
+    cronometro_total = StopWatch() # NUEVO: Controla el tiempo total del movimiento
+    angulo_anterior = left_motor.angle()
+    
     while not robot.drive_base.done():
-        if stall_stop and robot.drive_base.stalled():
-            robot.drive_base.stop()
-            break
+        # Añadimos un Período de Gracia de 400ms para permitir que el robot arranque
+        if stall_stop and cronometro_total.time() > 400:
+            # Evaluamos el avance real cada 150 ms
+            if cronometro_stall.time() > 150:
+                angulo_actual = left_motor.angle()
+                
+                # Si en 150ms avanzó menos de 3 grados, está resbalando contra una pared
+                if abs(angulo_actual - angulo_anterior) < 3:
+                    robot.drive_base.stop()
+                    return False # Retornamos False para avisar que chocamos
+                    
+                # Si avanzó bien, actualizamos la referencia y reiniciamos el reloj
+                angulo_anterior = angulo_actual
+                cronometro_stall.reset()
+                
+        # Si aún estamos en el período de gracia, mantenemos el reloj de stall reseteado
+        elif stall_stop:
+            angulo_anterior = left_motor.angle()
+            cronometro_stall.reset()
+                
         await wait(10)
+        
+    return True # Terminó su recorrido natural
 
 async def retrocede_gyro(target_heading, final_angle, max_speed=80, stall_stop=False):
     heading_actual = hub.imu.heading()
@@ -132,17 +156,41 @@ async def retrocede_gyro(target_heading, final_angle, max_speed=80, stall_stop=F
         robot.drive_base.turn(diferencia, wait=False)
         while not robot.drive_base.done():
             await wait(10)
+            
     vel_mm_s = (max_speed / 100.0) * 450.0
     robot.drive_base.settings(straight_speed=vel_mm_s)
             
     distancia_mm = (final_angle / 360.0) * (math.pi * 62.5)
     robot.drive_base.straight(-distancia_mm, wait=False)
     
+    # --- ALGORITMO DE DETECCIÓN DE ATASCO POR TIEMPO ---
+    cronometro_stall = StopWatch()
+    cronometro_total = StopWatch() # NUEVO: Controla el tiempo total
+    angulo_anterior = left_motor.angle()
+    
     while not robot.drive_base.done():
-        if stall_stop and robot.drive_base.stalled():
-            robot.drive_base.stop()
-            break
+        # Período de gracia de 400ms
+        if stall_stop and cronometro_total.time() > 400:
+            # Evaluamos el retroceso real cada 150 ms
+            if cronometro_stall.time() > 150:
+                angulo_actual = left_motor.angle()
+                
+                # Si en 150ms retrocedió menos de 3 grados, chocó con pared
+                if abs(angulo_actual - angulo_anterior) < 3:
+                    robot.drive_base.stop()
+                    return False
+                    
+                angulo_anterior = angulo_actual
+                cronometro_stall.reset()
+                
+        # Reset constante durante el período de gracia
+        elif stall_stop:
+            angulo_anterior = left_motor.angle()
+            cronometro_stall.reset()
+                
         await wait(10)
+        
+    return True
 
 async def giro(target_heading, tipo_carga="vacio"):
     if tipo_carga == "pesado":
@@ -270,18 +318,35 @@ async def giro_pivot(target_heading, pivote_izquierdo=True, tipo_carga="vacio"):
     right_motor.hold()
     await hub.speaker.beep(1000, 50)
 
-async def giro_arco(radio_mm, angulo_giro=90, velocidad_crucero=400):
+async def giro_arco(target_heading, radio_mm, velocidad_crucero=400):
+    # 1. Calculamos la diferencia angular usando la IMU
+    heading_actual = hub.imu.heading()
+    diferencia = (target_heading - heading_actual) % 360
+    if diferencia > 180:
+        diferencia -= 360
+        
+    # Si ya está en el ángulo deseado (con un margen de 0.5°), no hace nada
+    if abs(diferencia) < 0.5:
+        return
+        
+    # 2. Configuramos la velocidad del chasis
     robot.drive_base.settings(straight_speed=velocidad_crucero, turn_rate=300)
-    robot.drive_base.curve(radio_mm, angulo_giro, wait=False)
     
+    # 3. Ejecutamos la curva
+    # El radio dicta el tamaño del arco y 'diferencia' es exactamente 
+    # la cantidad de grados que necesita sumar/restar para llegar al target.
+    robot.drive_base.curve(radio_mm, diferencia, wait=False)
+    
+    # 4. Espera asíncrona
     while not robot.drive_base.done():
         await wait(10)
         
+    # 5. Frenado activo
     left_motor.hold()
     right_motor.hold()
     await hub.speaker.beep(1000, 50)
 
-async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectancia=12):
+async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectancia=3,freno=True):
     heading_actual = hub.imu.heading()
     diferencia = (target_heading - heading_actual) % 360
     if diferencia > 180:
@@ -308,7 +373,10 @@ async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectanc
             lecturas_negras_consecutivas += 1
             if lecturas_negras_consecutivas >= 2:
                 robot.drive_base.stop()
-                break
+                if freno:
+                    break
+                else:
+                    await avance_gyro(target_heading, 50, max_speed=30)
         else:
             lecturas_negras_consecutivas = 0
             
