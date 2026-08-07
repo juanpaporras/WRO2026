@@ -158,136 +158,97 @@ async def getBlackLineWidth():
 # ---------------------------------------------------------
 # FUNCIONES DE SEGUIMIENTO ÓPTICO (Mantienen lazo en Python)
 
-async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=380, accel_dist_mm=100, decel_dist_mm=100, vel_minima_mm_s=80, kp=4.0, kd=3, ki=0.0,freno=True):
-    # 1. Obtenemos la posición inicial usando la odometría del DriveBase
+async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=450, accel_dist_mm=50, decel_dist_mm=100, vel_minima_mm_s=80, kp=3, kd=2.1, ki=0.0, freno=True):
     start_dist = robot.drive_base.distance()
     cronometro = StopWatch()
     
-    # 2. Variables del controlador PID
-    last_t = cronometro.time() / 1000.0
     last_error = 0.0
     integral = 0.0
     derivada_filtrada = 0.0
-    alfa_filtro = 0.35 # Constante para el filtro pasa-bajos
+    alfa_filtro = 0.35 
     LIMITE_INTEGRAL = 30.0
-    
-    # Límite de seguridad para evitar volantazos violentos
     MAX_TURN_RATE = 60.0 
+    dt_fijo = 0.010
     
     while True:
-        # 3. Odometría: Distancia real recorrida
         dist_actual = robot.drive_base.distance() - start_dist
-        
         if dist_actual >= distancia_mm:
-            break # Llegamos exactamente a la meta
+            break 
             
-        # 4. Perfil de Velocidad Trapezoidal Espacial
         dist_faltante = distancia_mm - dist_actual
-        
         if dist_actual < accel_dist_mm:
-            # Fase de aceleración
             escala = dist_actual / accel_dist_mm
             vel_lineal = vel_minima_mm_s + (vel_crucero_mm_s - vel_minima_mm_s) * escala
         elif dist_faltante < decel_dist_mm and not freno:
-            # Fase de desaceleración 
             escala = dist_faltante / decel_dist_mm
             vel_lineal = vel_minima_mm_s + (vel_crucero_mm_s - vel_minima_mm_s) * escala
         else:
             vel_lineal = vel_crucero_mm_s
             
-        # 5. Lectura Síncrona y Cálculo de dt real
-        t_now = cronometro.time() / 1000.0
-        dt = t_now - last_t
-        if dt <= 0.001: dt = 0.001 
-        last_t = t_now
+        await sensor_mbc.actualizar_lectura()
+        error = sensor_mbc.error_espacial
         
-        error = await obtener_error_lpf2()
-        
-        # 6. Cálculo del PID (Salida en GRADOS/SEGUNDO de giro)
         P = error
-        
-        integral += error * dt
+        integral += error * dt_fijo
         integral = max(min(integral, LIMITE_INTEGRAL), -LIMITE_INTEGRAL)
         I = integral
         
-        derivada_cruda = (error - last_error) / dt
+        derivada_cruda = (error - last_error) / dt_fijo
         derivada_filtrada = (derivada_filtrada * (1.0 - alfa_filtro)) + (derivada_cruda * alfa_filtro)
         D = derivada_filtrada
         
-        # Zona muerta mecánica: Evita que los motores "tiemblen" en rectas perfectas
-        if abs(error) <= 0.1:
+        if abs(error) <= 0.2:
             error = 0.0
             
-        # Cálculo del giro con el signo correcto
         turn_rate = -((kp * P) + (ki * I) + (kd * D))
-        
-        # SATURACIÓN: Clamp para proteger la estabilidad inercial
         turn_rate = max(min(turn_rate, MAX_TURN_RATE), -MAX_TURN_RATE)
         
-        # 7. Ejecución Cinemática Continua
         robot.drive_base.drive(vel_lineal, turn_rate)
-        
         last_error = error
         await wait(10)
 
-    # 8. Frenado activo y preciso
     if freno:
         robot.drive_base.stop()
         await wait(50) 
 
-async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=360, kp=4.0, kd=4.0, ki=0.0, umbral_interseccion=8, centrado_estricto=False, target_heading=None,montarse=True):
-    # STREAMING_CHUNK: Inicializando variables de lazo
-    cronometro = StopWatch()
-    last_t = cronometro.time() / 1000.0
+async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=360, kp=4, kd=2.8, ki=0.0, umbral_interseccion=8, centrado_estricto=False, target_heading=None, montarse=True):
     last_error = 0.0
     integral = 0.0
     derivada_filtrada = 0.0
     alfa_filtro = 0.35
     LIMITE_INTEGRAL = 30.0
     MAX_TURN_RATE = 60.0
+    dt_fijo = 0.010 
     
     if lado == "izquierda":
-        setpoint = -6.0
-        vel_crucero_mm_s=300
-        kd=4.0 
+        setpoint = -4.0
+        vel_crucero_mm_s = 300
     elif lado == "derecha": 
-        setpoint = 6.0 
-        vel_crucero_mm_s=300
-        kd=4.0  
-    else: setpoint = 0.0  
+        setpoint = 4.0 
+        vel_crucero_mm_s = 300
+    else: 
+        setpoint = 0.0  
         
     lecturas_interseccion = 0
     
-    # STREAMING_CHUNK: Bucle principal de búsqueda
     while True:
-        ancho_linea = await getBlackLineWidth()
+        await sensor_mbc.actualizar_lectura()
+        ancho_linea = int(sensor_mbc.ancho_linea)
         if ancho_linea >= umbral_interseccion:
-            lecturas_interseccion += 1
-            if lecturas_interseccion >= 2:
-                break 
-        else:
-            lecturas_interseccion = 0 
+            break 
+    
             
-        t_now = cronometro.time() / 1000.0
-        dt = t_now - last_t
-        if dt <= 0.001: dt = 0.001
-        last_t = t_now
-            
-        error = (await obtener_error_lpf2()) - setpoint
-        
-        if abs(error) <= 1.2:
-            error = 0.0
+
+        error = sensor_mbc.error_espacial - setpoint
+         
             
         P = error
-        integral += error * dt
-        integral = max(min(integral, LIMITE_INTEGRAL), -LIMITE_INTEGRAL)
-        I = integral
 
-        derivada_cruda = (error - last_error) / dt
+        derivada_cruda = (error - last_error) / dt_fijo
         derivada_filtrada = (derivada_filtrada * (1.0 - alfa_filtro)) + (derivada_cruda * alfa_filtro)
         D = derivada_filtrada
         
-        turn_rate = -((kp * P) + (ki * I) + (kd * D))
+        turn_rate = -((kp * P) + (kd * D))
         turn_rate = max(min(turn_rate, MAX_TURN_RATE), -MAX_TURN_RATE)
 
         robot.drive_base.drive(vel_crucero_mm_s, turn_rate)
@@ -295,18 +256,13 @@ async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=360, k
         last_error = error
         await wait(10)
         
-    # STREAMING_CHUNK: Parada inicial y absorción de inercia
     if montarse:
         await montarse_linea(target_heading)
     else:
         robot.drive_base.stop()
     await wait(150) 
     
-    # STREAMING_CHUNK: Rutina de Centrado y Alineación (Dos Fases)
     if centrado_estricto:
-        
-        # --- FASE 1: Retroceso al Eje X (Línea) ---
-        # Si no se provee un target, guardamos el rumbo actual para no desviarnos más
         heading_lock = target_heading if target_heading is not None else hub.imu.heading()
         
         while True:
@@ -317,35 +273,25 @@ async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=360, k
             error_yaw = heading_lock - hub.imu.heading()
             error_yaw = ((error_yaw + 180) % 360) - 180
             
-            # Retrocedemos inyectando un micro-corrector de rumbo
             robot.drive_base.drive(-60, error_yaw * 2.5) 
             await wait(10)
             
         robot.drive_base.stop()
-        await wait(100) # Dejar asentar el chasis antes del giro
+        await wait(100) 
         
-        # --- FASE 2: Corrección In Situ (Eje Theta) ---
-        # Solo giramos si nos dieron un ángulo específico
         if target_heading is not None:
             while True:
                 error_angular = target_heading - hub.imu.heading()
                 error_angular = ((error_angular + 180) % 360) - 180
                 
-                # Tolerancia de medio grado
                 if abs(error_angular) <= 1:
                     break
                 
-                # Control Proporcional para giro en el sitio
-                # Kp = 3.5 da un giro suave que no derrapa
                 turn_rate_fino = error_angular * 3.5
-                
-                # Inyección de giro in situ (0 mm/s de velocidad lineal)
                 robot.drive_base.drive(0, turn_rate_fino)
                 await wait(10)
             
-            robot.drive_base.stop()
-            await wait(50)
-
+            robot.drive_base.stop
 # ---------------------------------------------------------
 # FUNCIONES CINEMÁTICAS DE ACTUADORES
 # ---------------------------------------------------------
@@ -366,15 +312,16 @@ async def motor_dc_por_segundos(motor, milisegundos, potencia):
     # STREAMING_CHUNK: Restaurando inyección directa por tiempo
     cronometro = StopWatch()
     motor.dc(potencia)
+    cronometro.reset()
     while cronometro.time() < milisegundos:
         await wait(10)
     motor.brake()
 
 async def subir_elevador_todo():
-    await motor_dc_por_segundos(motorElevador, 600, 90)
+    await motor_dc_por_segundos(motorElevador, 700, 90)
 
 async def subir_elevador():
-    await motor_dc_por_grados(motorElevador, 200, 100)
+    await motor_dc_por_grados(motorElevador, 185, 100)
 
 async def bajar_elevador():
     await motor_dc_por_segundos(motorElevador, 1000, -60)
@@ -386,8 +333,8 @@ async def subir_cuadro():
     await motor_dc_por_segundos(motorcuadro, 1500, -80)
 
 async def cerrar_cuadro():
-    await motor_dc_por_segundos(motorcuadro, 600, 100)
-    motorcuadro.dc(85)
+    await motor_dc_por_segundos(motorcuadro, 800, 90)
+    motorcuadro.hold
 
 async def abrir_garra():
     await motor_dc_por_grados(motorgarras, 160, 100)
@@ -404,15 +351,15 @@ async def cerrar_garra_poquito():
 async def dejar_bloques():
     await wait(300)
     await motor_dc_por_grados(motorElevador, -50, 70)
-    await motor_dc_por_grados(motorgarras, 175, 100)
+    await motor_dc_por_grados(motorgarras, 160, 100)
     await cerrar_garra_poquito()
     await subir_elevador_todo()
-    await motor_dc_por_grados(motorgarras, -100, 50)
-    await motor_dc_por_segundos(motorElevador, 500, -70)
+    await motor_dc_por_grados(motorgarras, -105, 50)
+    await motor_dc_por_segundos(motorElevador, 500, -60)
     await subir_elevador_todo()
-    await motor_dc_por_segundos(motorgarras, 500, -80)
-    await motor_dc_por_segundos(motorElevador, 500, -70)
-    await subir_elevador_todo()
+    # await motor_dc_por_segundos(motorgarras, 500, -80)
+    # await motor_dc_por_segundos(motorElevador, 500, -90)
+    # await subir_elevador_todo()
 
 async def dejar_bloques_2(heading):
     await retrocede_gyro(heading, 50, max_speed=30)
@@ -427,15 +374,14 @@ async def dejar_bloques_2(heading):
     await subir_elevador_todo()
 
 async def montarse_linea(heading):
-    await avance_gyro(heading, 45, max_speed=50)
+    await avance_gyro(heading, 55, max_speed=50,freno=True)
     await giro(heading)
-
 # ---------------------------------------------------------
 # RUTAS DE COMPETICIÓN (Máquina de Estados)
 # ---------------------------------------------------------
 async def Ruta_1_recoger_bloques():
     hub.imu.reset_heading(0)
-    await multitask(avance_gyro(0, 365, max_speed=65,), bajar_elevador())
+    await multitask(avance_gyro(0, 365, max_speed=70, freno=True), bajar_elevador())
     await cerrar_garra()
     await wait(800)
     await subir_elevador()
@@ -443,154 +389,173 @@ async def Ruta_1_recoger_bloques():
         
 async def Ruta_2_recoger_ladrillos_blancos():
     await giro(90)
-    await avance_gyro(90, 250)
+    await avance_gyro(90, 250,freno=False)
     await seguir_linea_distancia(1300)
     #await seguir_linea_hasta_interseccion("derecha",montarse=False)
-
-    await giro_arco(180,130)
+    await wait(200)
+    await giro_arco(173,130)
     await giro(-90)
 
-    await multitask( retrocede_gyro(-90, 670, stall_stop=True), bajar_cuadro())
-
+    await multitask(retrocede_gyro(-90, 1000, max_speed=50, stall_stop=True),bajar_cuadro())
+    await avance_gyro(-90, 40,freno=True)
     await cerrar_cuadro()
-    await wait (400)
-
 
 async def Ruta_3_llevar_ladrillos_blancos(angulo_giro):
-    await seguir_linea_hasta_interseccion("derecha",target_heading=-90)
-    await giro(0)
-    await seguir_linea_hasta_interseccion("derecha",310,centrado_estricto=True,target_heading=0)
+    await giro(-80)
+    await seguir_linea_hasta_interseccion("derecha",montarse=False)
+    await giro(2)
+    await seguir_linea_hasta_interseccion("derecha",centrado_estricto=True,target_heading=0)
     await giro(angulo_giro)
     await wait(100)
-    await retrocede_gyro(angulo_giro, 1262)
-    await giro_pivot(90, pivote_izquierdo=False, tipo_carga="pesado")
+    await retrocede_gyro(angulo_giro, 1265,freno=True)
+    await giro_pivot(92, pivote_izquierdo=False)
     await subir_cuadro()
     
 async def Ruta_4_recoger_verdes():
-    await giro_pivot(136, pivote_izquierdo=False, tipo_carga="pesado")
-    await avance_gyro(136, 465)
+    await giro_pivot(136, pivote_izquierdo=False)
+    await avance_gyro(136, 450,freno=True)
     await giro(90)
     await seguir_linea_hasta_interseccion(montarse=False)
     hub.imu.reset_heading(90)
     await giro(-90)
-    await multitask (retrocede_gyro(-90, 470, stall_stop=True), bajar_cuadro())
+    await multitask (retrocede_gyro(-90, 490, stall_stop=True,freno=True), bajar_cuadro())
     await cerrar_cuadro()
 
 async def Ruta_5_llevar_bloques():
     await seguir_linea_distancia(450,vel_crucero_mm_s=310)
     await seguir_linea_hasta_interseccion(montarse=False,vel_crucero_mm_s=310)
     heading_temporal = hub.imu.heading()
-    await avance_gyro(heading_temporal, 10000, max_speed=55, stall_stop=True)
+    await avance_gyro(heading_temporal, 400, max_speed=40, stall_stop=True)
+    robot.drive_base.stop()
+    await wait(50)
     hub.imu.reset_heading(-90)
 
 async def Ruta_6_llevar_ladrillos_verdes():
     await retrocede_gyro(-90, 600)
     await giro(90)
     await retrocede_gyro(90, 265)
-    await subir_cuadro()
-    await retrocede_gyro(90, 40)
+    await multitask (subir_cuadro(),retrocede_gyro(90, 40,freno=True))
 
 async def Ruta_7_recoger_ladrillos_amarillos():
     await seguir_linea_hasta_interseccion(montarse=True,target_heading=90)
-    await giro(0)
+    await giro(7)
     await seguir_linea_hasta_interseccion("derecha",montarse=True,target_heading=0)
-    await giro(-90)
-    await multitask(bajar_cuadro(),retrocede_gyro(-90, 430))
+    await giro(-93)
+    await multitask(bajar_cuadro(),retrocede_gyro(-93, 440,freno=True))
     await cerrar_cuadro()
 
 async def Ruta_8_llevar_ladrillos_amarillos():
-    await seguir_linea_hasta_interseccion("izquierda",montarse=True,target_heading=-90,vel_crucero_mm_s=310)
+    await avance_hasta_linea(-120)
     await giro(180)
-    await seguir_linea_distancia(450)
+    await seguir_linea_distancia(200)
     await seguir_linea_hasta_interseccion("derecha",target_heading=180)
+    await wait (200)
     await giro(-90)
-    await seguir_linea_distancia(300)
+    await seguir_linea_distancia(400,330)
     await seguir_linea_hasta_interseccion(target_heading=-90)
     await giro(180)
-    await retrocede_gyro(180, 180)
-    await subir_cuadro()
-    await retrocede_gyro(180, 40)   
-async def Ruta_8_llevar_ladrillos_amarillos_porm():
-    await seguir_linea_hasta_interseccion("izquierda")
-    await giro(-135)
-    await avance_hasta_linea(-135,freno=False)
-    await giro(-90)
-    await seguir_linea_hasta_interseccion(centrado_estricto=True,target_heading=-90)
-    await boton()
-
+    await multitask(subir_cuadro(),retrocede_gyro(180, 240,freno=True) )  
 
 async def Ruta_9_Recoger_y_llevar_YACUZY():
     await seguir_linea_hasta_interseccion(montarse=False)
-    hub.imu.reset_heading(180)
     await giro(0)
     await bajar_cuadro()
-    await retrocede_gyro(0, 140)
+    await retrocede_gyro(0, 140,freno=True)
     await cerrar_cuadro()
-    await seguir_linea_hasta_interseccion(target_heading=0)
 
+    
+    # await giro_pivot(100,True,"pesado")
+    # await retrocede_gyro(87, 386,freno=False)
+    # heading_temporal = hub.imu.heading()
+    # await avance_gyro(heading_temporal, 250,freno=False)
+    # await avance_gyro(80, 200,freno=False)
+    # await giro_pivot(0,True,"pesado")
+
+    await avance_gyro(0, 40,freno=False)
     await giro(90)
     await seguir_linea_distancia(480,vel_crucero_mm_s=310)
-    await giro_pivot(-5, pivote_izquierdo=True, tipo_carga="pesado")
-    await giro_pivot(90, pivote_izquierdo=False, tipo_carga="pesado")
-    await avance_gyro(90, 30)
+    await giro_pivot(-5, pivote_izquierdo=True,)
+    await giro_pivot(90, pivote_izquierdo=False,)
+    await avance_gyro(90, 30,freno=True)
     await subir_cuadro()
 
 async def Ruta_10_recoger_ladrillos_azules():
     await avance_gyro(90, 110)
     await giro(-90)
-    await multitask(retrocede_gyro(-90, 1000, max_speed=50, stall_stop=True),bajar_cuadro())
-    await avance_gyro(-90, 40)
+    await multitask(retrocede_gyro(-90, 1000, max_speed=40, stall_stop=True),bajar_cuadro())
+    robot.drive_base.stop()
+    await wait(50)
+    hub.imu.reset_heading(-90)
+    await wait(200)
+    await avance_gyro(-90, 40,freno=True)
     await cerrar_cuadro()
 
 async def Ruta_11_Recoger_pala():
     await seguir_linea_hasta_interseccion(target_heading=-90,vel_crucero_mm_s=300)
-    await giro(180)
-    await seguir_linea_hasta_interseccion("izquierda",target_heading=180,vel_crucero_mm_s=280)
-    await avance_gyro(180, 42)
-    await giro_pivot(-90, pivote_izquierdo=False, tipo_carga="pesado")
-    await multitask(avance_gyro(-90, 450), abrir_garra())
-    await motor_dc_por_segundos(motorElevador, 600, -30)
+    await giro(170)
+    await multitask( seguir_linea_hasta_interseccion("izquierda",vel_crucero_mm_s=210, montarse=False,centrado_estricto=True,target_heading=180),bajar_elevador())
+    await giro_pivot(-95,False)
+    await multitask( avance_gyro(-95, 300,freno=True),abrir_garra(), motor_dc_por_grados(motorElevador, 120, 100) )
     await cerrar_garra()
-    await wait(1000)
-    await motor_dc_por_grados(motorElevador, 40, 100)
-    await avance_gyro(-90, 1430, stall_stop=True)
+    await wait(600)
+    await avance_gyro(-100,210)
+    await avance_gyro(-90, 1200)
+    await retrocede_gyro(-90, 150)
+    await avance_gyro(-60, 470)
+    await giro(-90)
 
 async def Ruta_12_llevar_pala():
-    await retrocede_gyro(-90, 70)
-    await giro_pivot(-70, pivote_izquierdo=False,tipo_carga="pesado")
-    await avance_hasta_linea(-70)
+    await seguir_linea_hasta_interseccion(montarse=False)
+    await giro(-120)
+    await multitask (abrir_garra(),subir_elevador_todo())
     await giro(-90)
-    await seguir_linea_hasta_interseccion(target_heading=-90,vel_crucero_mm_s=300)
-    await giro(-116)
-    await multitask(abrir_garra(), subir_elevador_todo())
 
 async def Ruta_13_recoger_bloques_2():
-    await retrocede_gyro(-116, 250)
-    await giro(0)
+    await multitask (retrocede_gyro(-90, 260), motor_dc_por_grados(motorgarras, 100, 100))
+    await giro_pivot(0,False)
     await avance_hasta_linea(0)
-    await montarse_linea(0)
+    await avance_gyro(0, 20,40)
     await giro(-90)
-    await seguir_linea_hasta_interseccion(montarse=False)
-    await avance_gyro(-90, 287)
+    await seguir_linea_hasta_interseccion("izquierda",montarse=False,vel_crucero_mm_s=210)
+    await avance_gyro(-90, 268,freno=True)
     await giro(0)
     await bajar_elevador()
-    await avance_gyro(0, 120, max_speed=60)
+    heading_temporal=hub.imu.heading()
+    await avance_gyro(heading_temporal, 120, max_speed=70,freno=True)
     await cerrar_garra()
     await wait(800)
-    await subir_elevador()
+    await subir_elevador_todo()
+
+async def Ruta_14_llevar_bloques_2():
+    await avance_gyro(70, 840)
+    await giro(90)
+    await seguir_linea_hasta_interseccion(montarse=False, vel_crucero_mm_s=210)
+    heading_temporal=hub.imu.heading()
+    await avance_gyro(heading_temporal, 400, max_speed=40, stall_stop=True)
+    robot.drive_base.stop()
+    await wait(50)
+    hub.imu.reset_heading(90)
+
+async def Ruta_15_llevar_azules():
+    await retrocede_gyro(90, 600)
+    await giro(-90)
+    await retrocede_gyro(-90, 265)
+    await multitask (subir_cuadro(),retrocede_gyro(-90, 40,freno=True))
 
 # Inicio del Run
 async def Run():
+    # await giro_pivot(90)
+    # await giro_pivot(0)
+    # await giro_pivot(180)
     await subir_cuadro()
     await subir_elevador_todo()
     await advertencia_bateria()
     await boton()
-    hub.imu.reset_heading(0)
+    hub.imu.reset_heading(-90)
     await wait(200)
-    await boton()
     await Ruta_1_recoger_bloques()
     await Ruta_2_recoger_ladrillos_blancos()
-    await Ruta_3_llevar_ladrillos_blancos(135)
+    await Ruta_3_llevar_ladrillos_blancos(137)
     await Ruta_4_recoger_verdes()
     await Ruta_5_llevar_bloques()
     await dejar_bloques()
@@ -602,7 +567,9 @@ async def Run():
     await Ruta_11_Recoger_pala()
     await Ruta_12_llevar_pala()
     await Ruta_13_recoger_bloques_2()
-    
+    await Ruta_14_llevar_bloques_2()
+    await dejar_bloques()
+    await Ruta_15_llevar_azules()
     await medir_trayectos_manual()
 
 run_task(Run())

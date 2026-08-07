@@ -28,7 +28,7 @@ class Robot:
 
         self.drive_base.settings(
             straight_speed=450,         
-            straight_acceleration=450, 
+            straight_acceleration=1100, 
             turn_rate=350,            
             turn_acceleration=800      
         )
@@ -36,7 +36,7 @@ class Robot:
         self.drive_base.use_gyro(True)
         
         self.stopwatch = StopWatch()
-        self.hub.imu.settings(angular_velocity_threshold=2, acceleration_threshold=300)
+        self.hub.imu.settings(angular_velocity_threshold=2, acceleration_threshold=150)
 
     @classmethod
     def get_instance(cls):
