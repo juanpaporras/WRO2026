@@ -367,7 +367,7 @@ async def giro(target_heading, tipo_carga="vacio", reset_gyro=False, max_speed=N
     right_motor.hold()
     await hub.speaker.beep(1000, 50)
 
-async def giro_pivot(target_heading, pivote_izquierdo=True, tipo_carga="vacio", reset_gyro=False, max_speed=None, min_speed=None, accel_rate=1.5, decel_angle=None):
+async def giro_pivot(target_heading, pivote_izquierdo=True, tipo_carga="vacio", reset_gyro=False, max_speed=None, min_speed=None, accel_rate=2, decel_angle=None):
     
     if tipo_carga == "pesado":
         max_speed = 100 if max_speed is None else max_speed
