@@ -1,20 +1,43 @@
 from pybricks.hubs import PrimeHub
-from pybricks.pupdevices import Motor, ColorSensor
+from pybricks.pupdevices import Motor
 from pybricks.parameters import Port, Direction
+from pybricks.robotics import DriveBase
 from pybricks.tools import StopWatch
 
 class Robot:
     _instance = None  
+    
     def __init__(self):
         self.hub = PrimeHub()
+        
         self.left_motor = Motor(Port.F, Direction.COUNTERCLOCKWISE)
         self.right_motor = Motor(Port.B, Direction.CLOCKWISE)
-        ##self.left_arm = Motor(Port.E, Direction.CLOCKWISE)
-        ##self.right_arm = Motor(Port.B, Direction.CLOCKWISE)
-        #self.sensor_left = ColorSensor(Port.A) 
-        #self.sensor_right = ColorSensor(Port.D)
+      
+        DIAMETRO_RUEDA = 62.5
+        DISTANCIA_EJES =152.2
+        
+    
+        self.drive_base = DriveBase(
+            self.left_motor, 
+            self.right_motor, 
+            wheel_diameter=DIAMETRO_RUEDA, 
+            axle_track=DISTANCIA_EJES
+        )
+        
+    
+
+        self.drive_base.settings(
+            straight_speed=450,         
+            straight_acceleration=1100, 
+            turn_rate=350,            
+            turn_acceleration=800      
+        )
+        
+        self.drive_base.use_gyro(True)
+        
         self.stopwatch = StopWatch()
-        self.hub.imu.settings(angular_velocity_threshold=2, acceleration_threshold=300)
+        self.hub.imu.settings(angular_velocity_threshold=2, acceleration_threshold=150)
+
     @classmethod
     def get_instance(cls):
         if cls._instance is None:
