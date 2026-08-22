@@ -99,7 +99,7 @@ async def getBlackLineError():
     return (valor_reflexion / 10) - 8
 
 
-async def avance_gyro(target_heading, final_angle, max_speed=85, stall_stop=False, freno=False, aceleracion=1100):
+async def avance_gyro(target_heading, final_angle, max_speed=95, stall_stop=False, freno=False, aceleracion=1100):
     heading_actual = hub.imu.heading()
     diferencia = (target_heading - heading_actual) % 360
     if diferencia > 180:
@@ -228,40 +228,14 @@ async def giro(target_heading, tipo_carga="vacio"):
     left_motor.hold()
     right_motor.hold()
 
-async def giro_pivot(target_heading, pivote_izquierdo=True, tipo_carga="vacio", reset_gyro=False, max_speed=None, min_speed=None, accel_rate=2, decel_angle=None):
+async def giro_pivot(target_heading, pivote_izquierdo=True):
 
-    # Experimental tuning from incoming branch (kept as reference):
-    # max_speed, min_speed, decel_angle = 100, 45, 20.0
-    # kp, ki, kd, zona_integral, limite_integral = 8.5, 0.4, 0.12, 5.0, 25.0
-
-    if tipo_carga == "pesado":
-        max_speed = 100 if max_speed is None else max_speed
-        min_speed = 40 if min_speed is None else min_speed
-        decel_angle = 70.0 if decel_angle is None else decel_angle
-        kp = 3.0
-        ki = 1.0
-        kd = 0.06
-        zona_integral = 12.0
-        limite_integral = 15.0
-    elif tipo_carga == "medio":
-        max_speed = 100 if max_speed is None else max_speed
-        min_speed = 35 if min_speed is None else min_speed
-        decel_angle = 60.0 if decel_angle is None else decel_angle
-        kp = 3.1
-        ki = 0.9
-        kd = 0.05
-        zona_integral = 11.0
-        limite_integral = 15.0
-    else:  # "vacio"
-        max_speed = 100 if max_speed is None else max_speed
-        min_speed = 32 if min_speed is None else min_speed
-        decel_angle = 50.0 if decel_angle is None else decel_angle
-        kp = 3.2
-        ki = 0.8
-        kd = 0.05
-        zona_integral = 10.0
-        limite_integral = 15.0
-
+    max_speed, min_speed, decel_angle = 100, 45, 20.0 
+    # Aumenta drásticamente Kp. Aumenta Kd para evitar overshooting. Reduce Ki para control fino final.
+    kp, ki, kd, zona_integral, limite_integral = 8.5, 0.4, 0.12, 5.0, 25.0
+    # if tipo_carga == "pesado":
+    #     max_speed, min_speed, decel_angle = 100, 45, 50.0
+    #     kp, ki, kd, zona_integral, limite_integral = 3.0, 1.0, 0.06, 12.0, 15.0
 
     heading_inicial = hub.imu.heading()
     diferencia = (target_heading - heading_inicial) % 360
@@ -380,7 +354,7 @@ async def giro_arco(target_heading, radio_mm, velocidad_crucero=300):
     left_motor.hold()
     right_motor.hold()
 
-async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectancia=22,freno=True,giro=True):
+async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectancia=20,freno=True,giro=True):
     heading_actual = hub.imu.heading()
     diferencia = (target_heading - heading_actual) % 360
     if diferencia > 180:
