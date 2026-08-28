@@ -27,8 +27,8 @@ class Robot:
     
 
         self.drive_base.settings(
-            straight_speed=450,         
-            straight_acceleration=1100, 
+            straight_speed=400,         
+            straight_acceleration=300, 
             turn_rate=350,            
             turn_acceleration=800      
         )

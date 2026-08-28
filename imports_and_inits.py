@@ -111,7 +111,7 @@ async def avance_gyro(target_heading, final_angle, max_speed=95, stall_stop=Fals
             await wait(10)
             
     # Escalado de max_speed (porcentaje 0-100) a velocidad lineal en mm/s (máx 450 mm/s)
-    vel_mm_s = (max_speed / 100.0) * 450.0
+    vel_mm_s = (max_speed / 100.0) * 470.0
     
     # Se inyecta la variable de aceleración junto con la velocidad lineal
     robot.drive_base.settings(straight_speed=vel_mm_s, straight_acceleration=aceleracion)
@@ -154,7 +154,7 @@ async def avance_gyro(target_heading, final_angle, max_speed=95, stall_stop=Fals
         
     return True
 
-async def retrocede_gyro(target_heading, final_angle, max_speed=80, stall_stop=False, freno=False):
+async def retrocede_gyro(target_heading, final_angle, max_speed=80, stall_stop=False, freno=False, aceleracion=1100):
     heading_actual = hub.imu.heading()
     diferencia = (target_heading - heading_actual) % 360
     if diferencia > 180:
@@ -166,7 +166,7 @@ async def retrocede_gyro(target_heading, final_angle, max_speed=80, stall_stop=F
             await wait(10)
             
     vel_mm_s = (max_speed / 100.0) * 450.0
-    robot.drive_base.settings(straight_speed=vel_mm_s)
+    robot.drive_base.settings(straight_speed=vel_mm_s, straight_acceleration=aceleracion)
             
     distancia_mm = (final_angle / 360.0) * (math.pi * 62.5)
     
