@@ -354,7 +354,7 @@ async def giro_arco(target_heading, radio_mm, velocidad_crucero=300):
     left_motor.hold()
     right_motor.hold()
 
-async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectancia=20,freno=True,giro=True):
+async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectancia=5,freno=True,giro=True):
     heading_actual = hub.imu.heading()
     diferencia = (target_heading - heading_actual) % 360
     if diferencia > 180:
@@ -364,7 +364,7 @@ async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectanc
         robot.drive_base.turn(diferencia, wait=False)
         while not robot.drive_base.done():
             await wait(10)
-            
+    robot.drive_base.settings(straight_speed=300, straight_acceleration=600)        
     robot.drive_base.straight(2000, wait=False)
     
     # Filtro anti-ruido (requiere 2 lecturas consecutivas para frenar)
@@ -377,7 +377,7 @@ async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectanc
         error_mbc = sensor_mbc.error_espacial
         
         # Filtro Riguroso: Está centrado Y el color es definitivamente negro
-        if abs(error_mbc) < 6 and sensor_mbc.es_negro_puro(umbral_max=umbral_reflectancia):
+        if abs(error_mbc) < 7 and sensor_mbc.es_negro_puro(umbral_max=umbral_reflectancia):
             lecturas_negras_consecutivas += 1
             if lecturas_negras_consecutivas >= 2:
                 robot.drive_base.stop()

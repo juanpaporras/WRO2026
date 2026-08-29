@@ -30,7 +30,7 @@ class Robot:
             straight_speed=400,         
             straight_acceleration=300, 
             turn_rate=350,            
-            turn_acceleration=800      
+            turn_acceleration=400      
         )
         
         self.drive_base.use_gyro(True)
