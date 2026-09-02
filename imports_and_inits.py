@@ -32,7 +32,7 @@ class SensorLineaMBC_Diagnostico:
         except Exception:
             pass 
 
-    def es_negro_puro(self, umbral_max=25, sensores_centro=[3, 4]):
+    def es_negro_puro(self, umbral_max, sensores_centro=[3, 4]):
         for i in sensores_centro:
             if self.valores_individuales[i] > umbral_max:
                 return False
@@ -97,7 +97,6 @@ def normalizar_error_angular(error):
 async def getBlackLineError():
     valor_reflexion = await line.reflection()
     return (valor_reflexion / 10) - 8
-
 
 async def avance_gyro(target_heading, final_angle, max_speed=95, stall_stop=False, freno=False, aceleracion=1100):
     heading_actual = hub.imu.heading()
@@ -354,7 +353,13 @@ async def giro_arco(target_heading, radio_mm, velocidad_crucero=300):
     left_motor.hold()
     right_motor.hold()
 
-async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectancia=5,freno=True,giro=True):
+async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectancia=20, freno=True, giro=True, min_sensores_linea=2):
+
+    """
+    Avanza hasta que una cantidad específica (min_sensores_linea) de los 8 sensores
+    del arreglo MBC detecten negro puro (valor <= umbral_reflectancia).
+    """
+
     heading_actual = hub.imu.heading()
     diferencia = (target_heading - heading_actual) % 360
     if diferencia > 180:
@@ -364,6 +369,8 @@ async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectanc
         robot.drive_base.turn(diferencia, wait=False)
         while not robot.drive_base.done():
             await wait(10)
+            
+    # Configuración de velocidad y orden de avance
     robot.drive_base.settings(straight_speed=300, straight_acceleration=600)        
     robot.drive_base.straight(2000, wait=False)
     
@@ -371,13 +378,16 @@ async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectanc
     lecturas_negras_consecutivas = 0
     
     while not robot.drive_base.done():
-        # Actualizamos la geometría y la reflectancia al mismo tiempo
+        # Actualizamos la lectura de los 8 canales simultáneamente
         await sensor_mbc.actualizar_lectura()
         
-        error_mbc = sensor_mbc.error_espacial
+        # LÓGICA PARAMÉTRICA DE SENSORES:
+        # Contamos cuántos de los 8 valores de reflectancia son menores o iguales al umbral (negro).
+        # Asume que un valor de reflectancia bajo (<= umbral_reflectancia) equivale a la línea negra.
+        sensores_activos = sum(1 for v in sensor_mbc.valores_individuales if v <= umbral_reflectancia)
         
-        # Filtro Riguroso: Está centrado Y el color es definitivamente negro
-        if abs(error_mbc) < 7 and sensor_mbc.es_negro_puro(umbral_max=umbral_reflectancia):
+        # Filtro Riguroso: Se activa si N sensores o más ven la línea al mismo tiempo
+        if sensores_activos >= min_sensores_linea:
             lecturas_negras_consecutivas += 1
             if lecturas_negras_consecutivas >= 2:
                 robot.drive_base.stop()
@@ -388,6 +398,7 @@ async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectanc
         else:
             lecturas_negras_consecutivas = 0
             
+        # Detección de atasco (Stall) de los motores
         if stall_stop and robot.drive_base.stalled():
             robot.drive_base.stop()
             break
