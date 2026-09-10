@@ -567,29 +567,54 @@ async def Ruta_15_llevar_azules():
 
 # Inicio del Run
 async def Run():
+
     voltaje = (hub.battery.voltage() / 1000.0)
     print(voltaje)
     if float(voltaje) <= 7.9 or voltaje > 8.3:
         await hub.speaker.beep(1000, 50) 
-    await multitask (subir_cuadro(),subir_elevador_todo())
     hub.imu.reset_heading(0)
-    await Ruta_1_recoger_bloques()
-    await Ruta_2_recoger_ladrillos_blancos ()
-    await Ruta_3_llevar_ladrillos_blancos (137.5)
-    await Ruta_4_recoger_verdes ()
-    await Ruta_5_llevar_bloques ()
-    await dejar_bloques ()
-    await Ruta_6_llevar_ladrillos_verdes()
-    await Ruta_7_recoger_ladrillos_amarillos()
-    await Ruta_8_llevar_ladrillos_amarillos()
-    await Ruta_9_Recoger_y_llevar_YACUZY()
-    await Ruta_10_recoger_ladrillos_azules()
-    await Ruta_11_Recoger_pala()
-    await Ruta_12_llevar_pala()
-    await Ruta_13_recoger_bloques_2()
-    await Ruta_14_llevar_bloques_2()
-    await dejar_bloques_2()
-    await Ruta_15_llevar_azules()
+    await wait(300)
+    await giro(-90)
+    print("Heading:", hub.imu.heading())
+    await wait (1000)
+    await giro (90)
+    print("Heading:", hub.imu.heading())
+    await wait (1000)
+    await giro (180)
+    print("Heading:", hub.imu.heading())
+    await wait (1000)
+    await boton()
+
+
+
+
+    await avance_gyro(0, 1000)
+    await giro(-90)
+    await giro (90)
+    await giro (180)
+    await avance_gyro(180, 1000)
+    await giro(0)
+
+
+
+    # hub.imu.reset_heading(0)
+    # await Ruta_1_recoger_bloques()
+    # await Ruta_2_recoger_ladrillos_blancos ()
+    # await Ruta_3_llevar_ladrillos_blancos (137.5)
+    # await Ruta_4_recoger_verdes ()
+    # await Ruta_5_llevar_bloques ()
+    # await dejar_bloques ()
+    # await Ruta_6_llevar_ladrillos_verdes()
+    # await Ruta_7_recoger_ladrillos_amarillos()
+    # await Ruta_8_llevar_ladrillos_amarillos()
+    # await Ruta_9_Recoger_y_llevar_YACUZY()
+    # await Ruta_10_recoger_ladrillos_azules()
+    # await Ruta_11_Recoger_pala()
+    # await Ruta_12_llevar_pala()
+    # await Ruta_13_recoger_bloques_2()
+    # await Ruta_14_llevar_bloques_2()
+    # await dejar_bloques_2()
+    # await Ruta_15_llevar_azules()
     # await medir_trayectos_manual()
 
 run_task(Run())

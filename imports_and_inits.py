@@ -44,6 +44,7 @@ robot = get_robot()
 hub = robot.hub
 left_motor = robot.left_motor
 right_motor = robot.right_motor
+velocidad_lineal_maxima=700
 
 
 async def diagnostico_espectral_mbc():
@@ -98,7 +99,7 @@ async def getBlackLineError():
     valor_reflexion = await line.reflection()
     return (valor_reflexion / 10) - 8
 
-async def avance_gyro(target_heading, final_angle, max_speed=95, stall_stop=False, freno=False, aceleracion=1100):
+async def avance_gyro(target_heading, final_angle, max_speed=95, stall_stop=False, freno=False, aceleracion=2000):
     heading_actual = hub.imu.heading()
     diferencia = (target_heading - heading_actual) % 360
     if diferencia > 180:
@@ -110,7 +111,7 @@ async def avance_gyro(target_heading, final_angle, max_speed=95, stall_stop=Fals
             await wait(10)
             
     # Escalado de max_speed (porcentaje 0-100) a velocidad lineal en mm/s (máx 450 mm/s)
-    vel_mm_s = (max_speed / 100.0) * 470.0
+    vel_mm_s = (max_speed / 100.0) * velocidad_lineal_maxima  # velocidad_lineal_maxima = 450 mm/s
     
     # Se inyecta la variable de aceleración junto con la velocidad lineal
     robot.drive_base.settings(straight_speed=vel_mm_s, straight_acceleration=aceleracion)
@@ -153,7 +154,7 @@ async def avance_gyro(target_heading, final_angle, max_speed=95, stall_stop=Fals
         
     return True
 
-async def retrocede_gyro(target_heading, final_angle, max_speed=80, stall_stop=False, freno=False, aceleracion=1100):
+async def retrocede_gyro(target_heading, final_angle, max_speed=80, stall_stop=False, freno=False, aceleracion=2000):
     heading_actual = hub.imu.heading()
     diferencia = (target_heading - heading_actual) % 360
     if diferencia > 180:
@@ -164,7 +165,7 @@ async def retrocede_gyro(target_heading, final_angle, max_speed=80, stall_stop=F
         while not robot.drive_base.done():
             await wait(10)
             
-    vel_mm_s = (max_speed / 100.0) * 450.0
+    vel_mm_s = (max_speed / 100.0) * velocidad_lineal_maxima
     robot.drive_base.settings(straight_speed=vel_mm_s, straight_acceleration=aceleracion)
             
     distancia_mm = (final_angle / 360.0) * (math.pi * 62.5)
@@ -206,11 +207,11 @@ async def retrocede_gyro(target_heading, final_angle, max_speed=80, stall_stop=F
 
 async def giro(target_heading, tipo_carga="vacio"):
     if tipo_carga == "pesado":
-        robot.drive_base.settings(turn_rate=150, turn_acceleration=200)
+        robot.drive_base.settings(turn_rate=400, turn_acceleration=200)
     elif tipo_carga == "medio":
-        robot.drive_base.settings(turn_rate=220, turn_acceleration=700)
+        robot.drive_base.settings(turn_rate=500, turn_acceleration=700)
     else:
-        robot.drive_base.settings(turn_rate=380, turn_acceleration=1200)
+        robot.drive_base.settings(turn_rate=600, turn_acceleration=2000)
 
     heading_actual = hub.imu.heading()
     diferencia = (target_heading - heading_actual) % 360
@@ -219,13 +220,13 @@ async def giro(target_heading, tipo_carga="vacio"):
         
     if abs(diferencia) < 0.5:
         return
+    print(diferencia)
+    robot.drive_base.turn(diferencia, wait=True)
+    # while not robot.drive_base.done():
+    #     await wait(10)
         
-    robot.drive_base.turn(diferencia, wait=False)
-    while not robot.drive_base.done():
-        await wait(10)
-        
-    left_motor.hold()
-    right_motor.hold()
+    # left_motor.hold()
+    # right_motor.hold()
 
 async def giro_pivot(target_heading, pivote_izquierdo=True):
 
@@ -371,7 +372,7 @@ async def avance_hasta_linea(target_heading, stall_stop=False, umbral_reflectanc
             await wait(10)
             
     # Configuración de velocidad y orden de avance
-    robot.drive_base.settings(straight_speed=300, straight_acceleration=600)        
+    robot.drive_base.settings(straight_speed=600, straight_acceleration=1100)        
     robot.drive_base.straight(2000, wait=False)
     
     # Filtro anti-ruido (requiere 2 lecturas consecutivas para frenar)

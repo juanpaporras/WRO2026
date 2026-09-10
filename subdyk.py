@@ -14,7 +14,7 @@ class Robot:
         self.right_motor = Motor(Port.B, Direction.CLOCKWISE)
       
         DIAMETRO_RUEDA = 62.5
-        DISTANCIA_EJES =152.2
+        DISTANCIA_EJES =142
         
     
         self.drive_base = DriveBase(
@@ -29,8 +29,8 @@ class Robot:
         self.drive_base.settings(
             straight_speed=400,         
             straight_acceleration=300, 
-            turn_rate=350,            
-            turn_acceleration=400      
+            turn_rate=600,            
+            turn_acceleration=2000      
         )
         
         self.drive_base.use_gyro(True)
