@@ -1,5 +1,4 @@
 # Proyecto WRO 2026 Senior - Mosaic Masters
-# QUE ROJAS NO TENGA ACCESO A GITHUB PQ SE NOS CAGA EN TODO
 ## 1. Contexto y Estrategia del Reto
 Este repositorio contiene el código y la documentación mecánica de nuestro robot diseñado para la categoría Senior de la World Robot Olympiad (WRO) 2026, bajo el tema "Robots Meet Culture - Mosaic Masters".
 
