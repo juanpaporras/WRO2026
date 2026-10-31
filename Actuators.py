@@ -6,7 +6,7 @@ from pybricks.tools import wait, StopWatch
 # INICIALIZACIÓN DE MOTORES DE ACCESORIOS
 # =============================================================================
 
-motorgarras = Motor(Port.C)
+# motorgarras = Motor(Port.C)
 motorElevador = Motor(Port.E)
 motorcuadro = Motor(Port.A)
 
@@ -52,10 +52,10 @@ async def bajar_elevador():
     await motor_dc_por_segundos(motorElevador, 1000, -60)
 
 async def bajar_cuadro():
-    await motor_dc_por_grados(motorcuadro, 400, 80)
+    await motor_dc_por_grados(motorcuadro, 400, -80)
 
 async def subir_cuadro():
-    await motor_dc_por_segundos(motorcuadro, 1500, -90)
+    await motor_dc_por_segundos(motorcuadro, 1500, 90)
 
 async def cerrar_cuadro():
     await motor_dc_por_segundos(motorcuadro, 800, 90)

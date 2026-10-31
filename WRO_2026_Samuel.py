@@ -4,7 +4,7 @@ from pybricks.tools import wait, run_task, multitask
 from GyroMovement import hub, left_motor, right_motor, avance, retrocede, giro, giro_pivot
 from Line_sensors import seguir_linea_distancia, seguir_linea_hasta_interseccion, avance_hasta_linea
 from Actuators import (
-    motorgarras, motorElevador, motorcuadro, 
+    motorElevador, motorcuadro, 
     subir_elevador_todo, subir_elevador, bajar_elevador, 
     bajar_cuadro, subir_cuadro, cerrar_cuadro, 
     abrir_garra, abrir_garra_todo, cerrar_garra, cerrar_garra_poquito, 
@@ -14,6 +14,167 @@ from Extras import boton, advertencia_bateria, medir_trayectos_manual
 
 heading_temporal = 0
 
+colores= {1:bloques_amarillos, 2:bloques_azules, 3:bloques_verdes, 4:bloques_blancos}
+
+bloques_azules = 6
+bloques_verdes = 6
+bloques_amarillos = 6
+bloques_blancos = 6
+
+posicion_actual=0
+lado_posicion_actual=0 #0 es izquierda, 1 es derecha
+posicion_objetivo=0
+lado_posicion_objetivo=0 #0 es izquierda, diferente de 0 es derecha
+heading_objetivo=0
+lectura=[0,0,0,0,0,0]
+llevadas=0
+
+async def logica_de_recoleccion():
+    await giro(-90)
+    await abrir_garra_todo()
+    if lado_posicion_actual == 0: #Si el robot está en el lado izquierdo, avanza hasta la línea y se monta sobre ella, esta distancia es suficiente para que el robot agarre la primera fila
+        await seguir_linea_hasta_interseccion("izquierda", montarse=False, target_heading=-90)
+    else:
+        await seguir_linea_hasta_interseccion("derecha", montarse=False, target_heading=-90)
+    avanzar = 3 - colores[lectura[i]]/2 #Calcula cuantas filas de bloques hay que avanzar para llegar al bloque objetivo
+    while avanzar >= 1:
+        await avance(-90, 20) #Calibrar para que el robot avance a la siguiente fila de bloques
+        avanzar -= 1
+    await cerrar_garra()
+    colores[lectura[i]] -= 1 #Resta uno a la cantidad de bloques del color objetivo
+    avanzar = 3 - colores[lectura[i]]/2 #Calcula cuantas filas de bloques hay que avanzar para llegar al bloque objetivo
+    while avanzar >= 1:
+        await retrocede(-90, 20) #Calibrar para que el robot retroceda hasta llegar a la linea
+        avanzar -= 1
+    await retrocede(-90, 20) #Calibrar para que el robot retroceda hasta llegar a media linea para poder girar y avanzar hasta la línea de del siguiente color objetivo
+
+async def logica_de_movimiento(objetivo, lado_posicion_objetivo):
+    if objetivo > 0: # Si el objetivo es mayor que 0, gira a la derecha
+                giro(0)
+                heading_objetivo=0
+    elif objetivo < 0: # Si el objetivo es menor que 0, gira a la izquierda:
+                giro(180)
+                heading_objetivo=180
+    
+    if objetivo != 0: #si la distancia es diferente de 0, avanza hasta la línea
+        while abs(objetivo) > 1:
+            await avance_hasta_linea(heading_objetivo, distancia_ignorar=10, min_sensores_linea=1, montarse=True, distancia_montaje=10 ) #Valores a ajustar: Distancia a montarse para que pase sobre la linea
+            objetivo -= 1
+        
+        if (lado_posicion_objetivo==0 and heading_objetivo == 0) or (lado_posicion_objetivo!=0 and heading_objetivo == 180):
+            avance_hasta_linea(heading_objetivo, distancia_ignorar=10, min_sensores_linea=1, montarse=True, distancia_montaje=10 ) #Valores a ajustar: Distancia a montarse para que pase sobre la linea y se alinee con los bloques al otro lado 
+            giro(-90)
+            lado_posicion_actual = 1
+            posicion_actual = lectura[i]
+        else:
+            await avance_hasta_linea(heading_objetivo, distancia_ignorar=10, min_sensores_linea=1) #No se monta, solo avanza hasta la línea y se alinea con los bloques mas cercanos
+            await giro(-90)
+            lado_posicion_actual = 0
+            posicion_actual = lectura[i]
+    else:
+        if lado_posicion_objetivo == lado_posicion_actual: #Si tiene que ir a la derecha y el robot está en el lado izquierdo, gira a la derecha
+            giro(0)
+            avance(0,20) #Calibrar para que el robot se pase de izquierda a derecha
+            await giro (-90)
+            lado_posicion_actual = 1
+            posicion_actual = lectura[i]
+
+        elif lado_posicion_objetivo != 0 and lado_posicion_actual == 1: #Si tiene que ir a la izquierda y el robot está en el lado derecho, gira a la izquierda
+            giro(180)
+            avance(180,20) #Calibrar para que el robot se pase de derecha a izquierda
+            await giro(-90)
+            lado_posicion_actual = 0
+            posicion_actual = lectura[i]
+
+async def llevar_a_descarga():
+    if posicion_actual > 2:
+        objetivo = 2 - posicion_actual
+        lado_posicion_objetivo = 1
+        orientacion_retroceso = 1 # El robot esta a la abajo y debe retroceder hacia arriba
+    else:
+        objetivo = 3 - posicion_actual
+        lado_posicion_objetivo = 0
+        orientacion_retroceso = 0 # El robot esta a la arriba y debe retroceder hacia abajo
+
+    await logica_de_movimiento(objetivo, lado_posicion_objetivo)
+
+    if orientacion_retroceso == 1:
+        match(llevadas):
+            case 2:
+                await retrocede(180, 20) #Calibrar para que el robot retroceda un bloque
+            case 1:
+                await retrocede(180, 40) #Calibrar para que el robot retroceda dos bloques
+    else:
+        match(llevadas):
+            case 2:
+                await retrocede(0, 20) #Calibrar para que el robot retroceda un bloque
+            case 1:
+                await retrocede(0, 40) #Calibrar para que el robot retroceda dos bloques
+    await giro(90)
+    await avance (90, 20) #Calibrar para que el robot avance hasta la zona de descarga
+    await abrir_garra_todo()
+    await retrocede(90, 20) #Calibrar para que el robot retroceda hasta pasarse de la linea y para girar hacia arriva
+    await avance_hasta_linea(0, distancia_ignorar=10, min_sensores_linea=1)
+    posicion_actual = 3
+    lado_posicion_actual = 0
+
+async def agarrar_rojo():
+    objetivo = 4 - posicion_actual
+    lado_posicion_objetivo = 0
+    await logica_de_movimiento(objetivo, lado_posicion_objetivo) #El robot debe ir a la zona de descarga, que está en la posición 3 y lado izquierdo
+    await giro(90)
+    await avance(90, 20) #Calibrar para que el robot avance hasta el rojo
+    await giro(0)
+    await abrir_garra_todo()
+    await avance(0, 20) #Calibrar para que el robot avance hasta agarrar el rojo 
+    await cerrar_garra()
+    await retrocede(0, 20) #Calibrar para que el robot retroceda lo mismo que avanzó para agarrar el rojo\
+    await giro(90)
+    await retrocede(90, 20) #Calibrar para que el robot retroceda hasta pasarse de la linea y para girar hacia abajo
+    await giro(180)
+    await avance_hasta_linea(180, distancia_ignorar=10, min_sensores_linea=1) 
+    posicion_actual = 3
+    lado_posicion_actual = 1
+
+async def resolver_lecturas():
+    for i in lectura: #Recorre la lista de lecturas
+
+        if colores[lectura[i]] == 0: #Verifica si el color objetivo ya no tiene bloques, si es así, cambia el color objetivo al siguiente color disponible
+            if lectura[i] < 4 :
+                lectura[i] = lectura[i] + 1
+            else:
+                lectura[i] = lectura[i] - 1
+
+        if lectura[i] <5: # Si la lectura no es roja
+
+            """
+            LOGICA DE MOVIMIENTO HACIA EL COLOR OBJETIVO
+            """
+            lado_posicion_objetivo = colores[lectura[i]]%2 # Si el bloque es par, el lado objetivo es 0 (DERECHA), si es impar, el lado objetivo es 1 (IZQUIERDA)
+
+            objetivo = lectura[i] - posicion_actual # Calcula la diferencia entre la posición actual y la posición objetivo, me dice cuanto debo moverme para llegar al color objetivo
+            
+            await logica_de_movimiento(objetivo, lado_posicion_objetivo)
+
+            """
+            LOGICA PARA AVANZAR Y RECOGER EL BLOQUE
+            """
+            await logica_de_recoleccion()
+            contador += 1
+            if contador >1:
+                """
+                LOGICA PARA LLEVAR LOS BLOQUES A LA ZONA DE DESCARGA
+                """
+                await llevar_a_descarga() 
+
+                contador =0
+        else: 
+            """
+            Logica para cuando la lectura es roja
+            """
+            await agarrar_rojo()
+            
+    
 # ---------------------------------------------------------
 # RUTINAS LOCALES DE DESCARGA (Mantenidas en Main)
 # ---------------------------------------------------------
@@ -218,23 +379,23 @@ async def Run():
     await multitask(subir_cuadro(), subir_elevador_todo())
     hub.imu.reset_heading(0)
     
-    await Ruta_1_recoger_bloques()
-    await Ruta_2_recoger_ladrillos_blancos()
-    await Ruta_3_llevar_ladrillos_blancos(137.5)
-    await Ruta_4_recoger_verdes()
-    await Ruta_5_llevar_bloques()
-    await dejar_bloques()
-    await Ruta_6_llevar_ladrillos_verdes()
-    await Ruta_7_recoger_ladrillos_amarillos()
-    await Ruta_8_llevar_ladrillos_amarillos()
-    await Ruta_9_Recoger_y_llevar_YACUZY()
-    await Ruta_10_recoger_ladrillos_azules()
-    await Ruta_11_Recoger_pala()
-    await Ruta_12_llevar_pala()
-    await Ruta_13_recoger_bloques_2()
-    await Ruta_14_llevar_bloques_2()
-    await dejar_bloques_2()
-    await Ruta_15_llevar_azules()
-    await medir_trayectos_manual()
+    # await Ruta_1_recoger_bloques()
+    # await Ruta_2_recoger_ladrillos_blancos()
+    # await Ruta_3_llevar_ladrillos_blancos(137.5)
+    # await Ruta_4_recoger_verdes()
+    # await Ruta_5_llevar_bloques()
+    # await dejar_bloques()
+    # await Ruta_6_llevar_ladrillos_verdes()
+    # await Ruta_7_recoger_ladrillos_amarillos()
+    # await Ruta_8_llevar_ladrillos_amarillos()
+    # await Ruta_9_Recoger_y_llevar_YACUZY()
+    # await Ruta_10_recoger_ladrillos_azules()
+    # await Ruta_11_Recoger_pala()
+    # await Ruta_12_llevar_pala()
+    # await Ruta_13_recoger_bloques_2()
+    # await Ruta_14_llevar_bloques_2()
+    # await dejar_bloques_2()
+    # await Ruta_15_llevar_azules()
+    # await medir_trayectos_manual()
 
 run_task(Run())
