@@ -100,7 +100,7 @@ async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=700, accel_dist_
         await wait(50) 
 
 
-async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, kp=5, kd=2.8, ki=0.0, umbral_interseccion=8, centrado_estricto=False, target_heading=None, montarse=True, distancia_montaje=20):
+async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, kp=6, kd=2.8, ki=0.0, umbral_interseccion=8, centrado_estricto=False, target_heading=None, montarse=True, distancia_montaje=20):
     last_error = 0.0
     derivada_filtrada = 0.0
     alfa_filtro = 0.35
@@ -108,13 +108,11 @@ async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, k
     dt_fijo = 0.010 
     
     if lado == "izquierda":
-        umbral_interseccion = 7
-        setpoint = -6.0
-        vel_crucero_mm_s = 300
+        umbral_interseccion = 6
+        setpoint = -7.0
     elif lado == "derecha": 
-        umbral_interseccion = 7
-        setpoint = 6.0 
-        vel_crucero_mm_s = 300
+        umbral_interseccion = 6
+        setpoint = 7.0 
     else: 
         setpoint = 0.0  
         
@@ -124,8 +122,12 @@ async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, k
         
         if ancho_linea >= umbral_interseccion:
             if not montarse:
+                # stop() deja las ruedas sueltas y el robot seguía rodando con la última
+                # corrección del seguidor (se torcía). hold() frena las dos ruedas en seco.
                 robot.drive_base.stop()
-                break 
+                left_motor.hold()
+                right_motor.hold()
+                break
             else:
                 robot.drive_base.drive(vel_crucero_mm_s, 0)
                 distancia_referencia = robot.drive_base.distance()
@@ -137,7 +139,20 @@ async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, k
                 
                 if target_heading is not None:
                     await giro(target_heading)
-                break 
+                break
+
+        # Si el sensor NO ve línea, error_espacial vale -8 (lectura vacía) y el PD haría girar
+        # al robot a toda velocidad. En ese caso avanza recto con el giroscopio hasta encontrarla.
+        if ancho_linea == 0:
+            if target_heading is not None:
+                error_yaw = ((target_heading - hub.imu.heading() + 180) % 360) - 180
+                robot.drive_base.drive(vel_crucero_mm_s, error_yaw * 2.5)
+            else:
+                robot.drive_base.drive(vel_crucero_mm_s, 0)
+            last_error = 0.0
+            derivada_filtrada = 0.0
+            await wait(10)
+            continue
 
         error = sensor_mbc.error_espacial - setpoint
         P = error
@@ -177,7 +192,8 @@ async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, k
             robot.drive_base.stop()
 
 
-async def avance_hasta_linea(target_heading, distancia_ignorar=0, umbral_negro=10, umbral_blanco=70, montarse=False, distancia_montaje=50, min_sensores_linea=2, max_dc=80.0, min_dc=20.0, kp=3.5, kd=0.18):
+async def avance_hasta_linea(target_heading, distancia_ignorar=0, umbral_negro=10, umbral_blanco=70, montarse=False, distancia_montaje=50, min_sensores_linea=2, max_dc=80.0, min_dc=20.0, kp=3.5, kd=0.18, esperar_blanco=True):
+    # esperar_blanco=False: busca el negro desde el inicio (útil si el robot ya está sobre blanco)
     left_motor.reset_angle(0)
     right_motor.reset_angle(0)
 
@@ -212,7 +228,7 @@ async def avance_hasta_linea(target_heading, distancia_ignorar=0, umbral_negro=1
         right_motor.dc(max_dc - correccion)
         await wait(10)
 
-    estado_busqueda = 0  
+    estado_busqueda = 0 if esperar_blanco else 1
     lecturas_consecutivas = 0
 
     while True:
@@ -274,6 +290,106 @@ async def avance_hasta_linea(target_heading, distancia_ignorar=0, umbral_negro=1
     await wait(60)
 
 
+async def avance_contando_lineas(target_heading, num_lineas, distancia_ignorar=10, umbral_negro=10, umbral_blanco=70, min_sensores_linea=1, montarse=False, distancia_montaje=10, max_dc=80.0, min_dc=25.0, dc_aproximacion=40.0, accel_mm=50.0, kp=3.5, kd=0.18):
+    """Avanza de forma continua (sin frenar) cruzando líneas negras y se
+    detiene al llegar a la línea número `num_lineas`.
+
+    - Cada línea se cuenta al pasar de blanco a negro; para contar la siguiente
+      el sensor tiene que volver a ver blanco, así no cuenta la misma dos veces.
+    - Acelera al principio y, cuando solo falta la última línea, baja a
+      `dc_aproximacion` para frenar con precisión.
+    - Si `montarse=True`, al ver la última línea avanza `distancia_montaje` mm más
+      (sin dejar de corregir el rumbo) antes de frenar.
+    """
+    if num_lineas <= 0:
+        return
+
+    left_motor.reset_angle(0)
+    right_motor.reset_angle(0)
+
+    DIAMETRO_RUEDA = 63.0
+    FACTOR_CONVERSION = (DIAMETRO_RUEDA * 3.141) / 360.0
+
+    error_previo = 0.0
+    derivada_filtrada = 0.0
+    ALFA_FILTRO = 0.35
+    cronometro_lazo = StopWatch()
+    cronometro_lazo.reset()
+
+    lineas_contadas = 0
+    estado_busqueda = 0          # 0 = esperando blanco, 1 = esperando negro
+    lecturas_consecutivas = 0
+    montando = False
+    distancia_inicio_montaje = 0.0
+
+    while True:
+        dt = cronometro_lazo.time() / 1000.0
+        cronometro_lazo.reset()
+        if dt <= 0: dt = 0.001
+
+        recorrido = ((left_motor.angle() + right_motor.angle()) / 2.0) * FACTOR_CONVERSION
+
+        # --- Detección de líneas (solo después de la distancia a ignorar) ---
+        if montando:
+            if recorrido - distancia_inicio_montaje >= distancia_montaje:
+                break
+        elif recorrido >= distancia_ignorar:
+            await sensor_mbc.actualizar_lectura()
+            valores = sensor_mbc.valores_individuales
+
+            if estado_busqueda == 0:
+                if sum(1 for v in valores if v >= umbral_blanco) >= min_sensores_linea:
+                    lecturas_consecutivas += 1
+                    if lecturas_consecutivas >= 2:
+                        estado_busqueda = 1
+                        lecturas_consecutivas = 0
+                else:
+                    lecturas_consecutivas = 0
+            else:
+                if sum(1 for v in valores if v <= umbral_negro) >= min_sensores_linea:
+                    lecturas_consecutivas += 1
+                    if lecturas_consecutivas >= 2:
+                        lineas_contadas += 1
+                        estado_busqueda = 0      # esperar blanco antes de la siguiente
+                        lecturas_consecutivas = 0
+                        if lineas_contadas >= num_lineas:
+                            if not montarse:
+                                break
+                            montando = True
+                            distancia_inicio_montaje = recorrido
+                else:
+                    lecturas_consecutivas = 0
+
+        # --- Velocidad: acelera al inicio, baja solo antes de la última línea ---
+        if lineas_contadas >= num_lineas - 1:
+            dc_objetivo = dc_aproximacion
+        else:
+            dc_objetivo = max_dc
+
+        if recorrido < accel_mm:
+            dc_base = min_dc + (dc_objetivo - min_dc) * max(recorrido, 0.0) / accel_mm
+        else:
+            dc_base = dc_objetivo
+
+        # --- Corrección de rumbo con el giroscopio ---
+        error_ang = target_heading - hub.imu.heading()
+        error_ang = (error_ang + 180) % 360 - 180
+
+        derivada_cruda = (error_ang - error_previo) / dt
+        derivada_filtrada = (derivada_filtrada * (1.0 - ALFA_FILTRO)) + (derivada_cruda * ALFA_FILTRO)
+        correccion = (kp * error_ang) + (kd * derivada_filtrada)
+
+        left_motor.dc(max(min(dc_base + correccion, 100.0), -100.0))
+        right_motor.dc(max(min(dc_base - correccion, 100.0), -100.0))
+
+        error_previo = error_ang
+        await wait(10)
+
+    left_motor.hold()
+    right_motor.hold()
+    await wait(60)
+
+
 async def retrocede_hasta_linea(target_heading, distancia_ignorar=0, umbral_negro=10, umbral_blanco=70, montarse=False, distancia_montaje=50, min_sensores_linea=2, max_dc=80.0, min_dc=20.0, kp=3.5, kd=0.18):
     left_motor.reset_angle(0)
     right_motor.reset_angle(0)
@@ -305,8 +421,8 @@ async def retrocede_hasta_linea(target_heading, distancia_ignorar=0, umbral_negr
         termino_p = kp * error_ang
         correccion = max(min(termino_p, 15.0), -15.0)
 
-        left_motor.dc(-max_dc - correccion)
-        right_motor.dc(-max_dc + correccion)
+        left_motor.dc(-max_dc + correccion)   # Mismo signo de corrección que al avanzar
+        right_motor.dc(-max_dc - correccion)
         await wait(10)
 
     estado_busqueda = 0  
@@ -358,8 +474,8 @@ async def retrocede_hasta_linea(target_heading, distancia_ignorar=0, umbral_negr
         correccion = (kp * error_ang) + (kd * derivada_filtrada)
         
         dc_base = -max_dc
-        dc_izq = max(min(dc_base - correccion, 100.0), -100.0)
-        dc_der = max(min(dc_base + correccion, 100.0), -100.0)
+        dc_izq = max(min(dc_base + correccion, 100.0), -100.0)   # Mismo signo de corrección que al avanzar
+        dc_der = max(min(dc_base - correccion, 100.0), -100.0)
 
         left_motor.dc(dc_izq)
         right_motor.dc(dc_der)

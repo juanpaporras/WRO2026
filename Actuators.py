@@ -57,20 +57,23 @@ async def bajar_cuadro():
 async def subir_cuadro():
     await motor_dc_por_segundos(motorcuadro, 1500, 90)
 
+async def cerrar_cuadro():
+    await motor_dc_por_grados(motorcuadro, -400, 80)  # calibrar
+
 async def cerrar_paletas():
-    servo (19, 270)  # cerrar paletas
+    await servo(19, 270)  # cerrar paletas
 
 async def abrir_paletas():
-    servo (19, 30)  # abrir paletas
+    await servo(19, 30)  # abrir paletas
 
 async def abrir_garra():
-    await motor_dc_por_grados(motorgarras, 200, 100)
+    await servo(20, 30)  # abrir garra
 
 async def abrir_garra_todo():
-    await motor_dc_por_segundos(motorgarras, 1000, 100)
+    await servo(20, 270)  # abrir garra
 
 async def cerrar_garra():
-    motorgarras.dc(-100)
+    await servo(20, 0)  # cerrar garra
 
 async def cerrar_garra_poquito():
-    await motor_dc_por_grados(motorgarras, -46, 60)
+    await servo(20, 45)  # cerrar garra un poco

@@ -39,7 +39,8 @@ async def avance(target_heading, distancia_mm, max_dc=100.0, min_dc=16.0, accel_
     FACTOR_CONVERSION = (DIAMETRO_RUEDA * 3.141) / 360.0
 
     recorrido = 0.0
-    error_previo = 0.0
+    # Igual que en retrocede: evita el golpe de la derivada en el primer ciclo
+    error_previo = ((target_heading - hub.imu.heading() + 180) % 360) - 180
     derivada_filtrada = 0.0
     ALFA_FILTRO = 0.35
 
@@ -49,7 +50,7 @@ async def avance(target_heading, distancia_mm, max_dc=100.0, min_dc=16.0, accel_
     while abs(recorrido) < abs(distancia_mm):
         dt = cronometro_lazo.time() / 1000.0
         cronometro_lazo.reset()
-        if dt <= 0: dt = 0.001
+        if dt <= 0.005: dt = 0.02   # primer ciclo / ciclo muy corto: usa el periodo normal
 
         ang_izq = left_motor.angle()
         ang_der = right_motor.angle()
@@ -102,7 +103,9 @@ async def retrocede(target_heading, distancia_mm, max_dc=100.0, min_dc=16.0, acc
     FACTOR_CONVERSION = (DIAMETRO_RUEDA * 3.141) / 360.0
 
     recorrido = 0.0
-    error_previo = 0.0
+    # Arranca la derivada con el error real: si empieza en 0, el primer ciclo
+    # calcula (error - 0) / 0.001 y da un golpe enorme a una rueda (arrancón).
+    error_previo = ((target_heading - hub.imu.heading() + 180) % 360) - 180
     derivada_filtrada = 0.0
     ALFA_FILTRO = 0.35
 
@@ -112,7 +115,7 @@ async def retrocede(target_heading, distancia_mm, max_dc=100.0, min_dc=16.0, acc
     while abs(recorrido) < abs(distancia_mm):
         dt = cronometro_lazo.time() / 1000.0
         cronometro_lazo.reset()
-        if dt <= 0: dt = 0.001
+        if dt <= 0.005: dt = 0.02   # primer ciclo / ciclo muy corto: usa el periodo normal
 
         ang_izq = left_motor.angle()
         ang_der = right_motor.angle()
@@ -142,8 +145,10 @@ async def retrocede(target_heading, distancia_mm, max_dc=100.0, min_dc=16.0, acc
         termino_d = kd * derivada_filtrada
         correccion = termino_p + termino_d
 
-        dc_izq = max(min(dc_base - correccion, 100.0), -100.0)
-        dc_der = max(min(dc_base + correccion, 100.0), -100.0)
+        # Mismo signo que en avance(): para girar a la derecha la rueda izquierda
+        # debe ir "más adelante" que la derecha, aunque el robot vaya en reversa.
+        dc_izq = max(min(dc_base + correccion, 100.0), -100.0)
+        dc_der = max(min(dc_base - correccion, 100.0), -100.0)
 
         left_motor.dc(dc_izq)
         right_motor.dc(dc_der)
