@@ -1,7 +1,7 @@
 from pybricks.pupdevices import Motor
 from pybricks.parameters import Port
 from pybricks.tools import wait, StopWatch
-
+from Funciones_ESP32 import servo
 # =============================================================================
 # INICIALIZACIÓN DE MOTORES DE ACCESORIOS
 # =============================================================================
@@ -57,9 +57,11 @@ async def bajar_cuadro():
 async def subir_cuadro():
     await motor_dc_por_segundos(motorcuadro, 1500, 90)
 
-async def cerrar_cuadro():
-    await motor_dc_por_segundos(motorcuadro, 800, 90)
-    motorcuadro.hold()
+async def cerrar_paletas():
+    servo (19, 270)  # cerrar paletas
+
+async def abrir_paletas():
+    servo (19, 30)  # abrir paletas
 
 async def abrir_garra():
     await motor_dc_por_grados(motorgarras, 200, 100)
