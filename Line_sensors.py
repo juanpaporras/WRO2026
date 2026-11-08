@@ -2,6 +2,11 @@ from pybricks.parameters import Port
 from pybricks.tools import wait, StopWatch
 from pybricks.iodevices import PUPDevice
 from GyroMovement import hub, left_motor, right_motor, robot, giro
+from Extras import boton
+
+# Umbrales del sensor MBC (0-255) usados por todas las funciones de detección de línea
+UMBRAL_NEGRO = 5    # Calibrar: lectura <= este valor se considera negro
+UMBRAL_BLANCO = 60  # Calibrar: lectura >= este valor se considera blanco
 
 # =============================================================================
 # CONFIGURACIÓN DEL SENSOR MBC
@@ -45,6 +50,37 @@ class SensorLineaMBC:
             pass
 
 sensor_mbc = SensorLineaMBC(Port.D)
+
+async def diagnostico_espectral_mbc():
+    """
+    Función de muestreo continuo para calibrar umbrales de reflectancia.
+    Imprime el arreglo de los 8 fotodetectores y aísla los valores centrales.
+    """
+    print("==================================================")
+    print(" INICIO DE MUESTREO: DIAGNÓSTICO ESPECTRAL MBC ")
+    print("==================================================")
+    print("Instrucciones: Desplaza el robot manualmente sobre la pista.")
+    print("Observa los valores en verde, azul y negro puro.")
+    
+    while True:
+        # 1. Actualizar las lecturas desde el microcontrolador del sensor
+        await sensor_mbc.actualizar_lectura()
+        
+        # 2. Extraer la matriz de reflectancia (valores de 0 a 100)
+        arreglo_luces = sensor_mbc.valores_individuales
+        
+        # 3. Formatear y aislar los fotodetectores centrales (índices 3 y 4)
+        if len(arreglo_luces) == 8:
+            centro_izq = arreglo_luces[3]
+            centro_der = arreglo_luces[4]
+            
+            # Se imprime la matriz completa y se destacan los canales de interés
+            print(f"RAW [0-7]: {arreglo_luces} | Centro (3,4): [{centro_izq}, {centro_der}]")
+        else:
+            print("Esperando trama de datos válida...")
+            
+        # 4. Retardo para estabilizar la lectura en consola
+        await wait(250)
 
 async def getBlackLineWidth():
     await sensor_mbc.actualizar_lectura()
@@ -100,7 +136,7 @@ async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=700, accel_dist_
         await wait(50) 
 
 
-async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, kp=6, kd=2.8, ki=0.0, umbral_interseccion=8, centrado_estricto=False, target_heading=None, montarse=True, distancia_montaje=20):
+async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, kp=6, kd=2.8, ki=0.0, umbral_interseccion=8, centrado_estricto=False, target_heading=None, montarse=False, distancia_montaje=20):
     last_error = 0.0
     derivada_filtrada = 0.0
     alfa_filtro = 0.35
@@ -109,10 +145,10 @@ async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, k
     
     if lado == "izquierda":
         umbral_interseccion = 6
-        setpoint = -7.0
+        setpoint = -8.0
     elif lado == "derecha": 
         umbral_interseccion = 6
-        setpoint = 7.0 
+        setpoint = 8.0 
     else: 
         setpoint = 0.0  
         
@@ -192,7 +228,44 @@ async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, k
             robot.drive_base.stop()
 
 
-async def avance_hasta_linea(target_heading, distancia_ignorar=0, umbral_negro=10, umbral_blanco=70, montarse=False, distancia_montaje=50, min_sensores_linea=2, max_dc=80.0, min_dc=20.0, kp=3.5, kd=0.18, esperar_blanco=True):
+async def _montaje_pid(target_heading, distancia_mm, dc, kp, kd, sentido=1):
+    """Avanza (sentido=1) o retrocede (sentido=-1) distancia_mm corrigiendo el rumbo
+    con el giroscopio (PD), igual que el resto del movimiento. Se usa para montarse
+    sobre la línea después de detectarla."""
+    left_motor.reset_angle(0)
+    right_motor.reset_angle(0)
+    FACTOR_CONVERSION = (63.0 * 3.141) / 360.0
+    ALFA_FILTRO = 0.35
+
+    error_previo = ((target_heading - hub.imu.heading() + 180) % 360) - 180
+    derivada_filtrada = 0.0
+    cronometro_lazo = StopWatch()
+    cronometro_lazo.reset()
+    dc_base = abs(dc) * sentido
+
+    while True:
+        recorrido = ((abs(left_motor.angle()) + abs(right_motor.angle())) / 2.0) * FACTOR_CONVERSION
+        if recorrido >= distancia_mm:
+            break
+
+        dt = cronometro_lazo.time() / 1000.0
+        cronometro_lazo.reset()
+        if dt <= 0.005: dt = 0.01
+
+        error_ang = ((target_heading - hub.imu.heading() + 180) % 360) - 180
+        derivada_cruda = (error_ang - error_previo) / dt
+        derivada_filtrada = (derivada_filtrada * (1.0 - ALFA_FILTRO)) + (derivada_cruda * ALFA_FILTRO)
+        correccion = (kp * error_ang) + (kd * derivada_filtrada)
+
+        # Mismo signo de corrección al avanzar y al retroceder
+        left_motor.dc(max(min(dc_base + correccion, 100.0), -100.0))
+        right_motor.dc(max(min(dc_base - correccion, 100.0), -100.0))
+
+        error_previo = error_ang
+        await wait(10)
+
+
+async def avance_hasta_linea(target_heading, distancia_ignorar=0, umbral_negro=UMBRAL_NEGRO, umbral_blanco=UMBRAL_BLANCO, montarse=False, distancia_montaje=50, min_sensores_linea=2, max_dc=80.0, min_dc=20.0, kp=3.5, kd=0.18, esperar_blanco=True):
     # esperar_blanco=False: busca el negro desde el inicio (útil si el robot ya está sobre blanco)
     left_motor.reset_angle(0)
     right_motor.reset_angle(0)
@@ -257,12 +330,8 @@ async def avance_hasta_linea(target_heading, distancia_ignorar=0, umbral_negro=1
                     if not montarse:
                         break
                     else:
-                        left_motor.reset_angle(0)
-                        while True:
-                            ang_actual = (abs(left_motor.angle()) + abs(right_motor.angle())) / 2.0 * FACTOR_CONVERSION
-                            if ang_actual >= distancia_montaje:
-                                break
-                            await wait(5)
+                        # Montaje con PID de giroscopio (antes solo seguía con la última potencia)
+                        await _montaje_pid(target_heading, distancia_montaje, max_dc, kp, kd, sentido=1)
                         break
             else:
                 lecturas_consecutivas = 0
@@ -273,9 +342,9 @@ async def avance_hasta_linea(target_heading, distancia_ignorar=0, umbral_negro=1
 
         derivada_cruda = (error_ang - error_previo) / dt
         derivada_filtrada = (derivada_filtrada * (1.0 - ALFA_FILTRO)) + (derivada_cruda * ALFA_FILTRO)
-        
+
         correccion = (kp * error_ang) + (kd * derivada_filtrada)
-        
+
         dc_izq = max(min(max_dc + correccion, 100.0), -100.0)
         dc_der = max(min(max_dc - correccion, 100.0), -100.0)
 
@@ -290,7 +359,7 @@ async def avance_hasta_linea(target_heading, distancia_ignorar=0, umbral_negro=1
     await wait(60)
 
 
-async def avance_contando_lineas(target_heading, num_lineas, distancia_ignorar=10, umbral_negro=10, umbral_blanco=70, min_sensores_linea=1, montarse=False, distancia_montaje=10, max_dc=80.0, min_dc=25.0, dc_aproximacion=40.0, accel_mm=50.0, kp=3.5, kd=0.18):
+async def avance_contando_lineas(target_heading, num_lineas, distancia_ignorar=10, umbral_negro=UMBRAL_NEGRO, umbral_blanco=UMBRAL_BLANCO, min_sensores_linea=1, montarse=False, distancia_montaje=10, max_dc=80.0, min_dc=25.0, dc_aproximacion=40.0, accel_mm=50.0, kp=3.5, kd=0.18):
     """Avanza de forma continua (sin frenar) cruzando líneas negras y se
     detiene al llegar a la línea número `num_lineas`.
 
@@ -390,7 +459,7 @@ async def avance_contando_lineas(target_heading, num_lineas, distancia_ignorar=1
     await wait(60)
 
 
-async def retrocede_hasta_linea(target_heading, distancia_ignorar=0, umbral_negro=10, umbral_blanco=70, montarse=False, distancia_montaje=50, min_sensores_linea=2, max_dc=80.0, min_dc=20.0, kp=3.5, kd=0.18):
+async def retrocede_hasta_linea(target_heading, distancia_ignorar=0, umbral_negro=UMBRAL_NEGRO, umbral_blanco=UMBRAL_BLANCO, montarse=False, distancia_montaje=50, min_sensores_linea=2, max_dc=80.0, min_dc=20.0, kp=3.5, kd=0.18):
     left_motor.reset_angle(0)
     right_motor.reset_angle(0)
 
@@ -454,12 +523,8 @@ async def retrocede_hasta_linea(target_heading, distancia_ignorar=0, umbral_negr
                     if not montarse:
                         break
                     else:
-                        left_motor.reset_angle(0)
-                        while True:
-                            ang_actual = (abs(left_motor.angle()) + abs(right_motor.angle())) / 2.0 * FACTOR_CONVERSION
-                            if ang_actual >= distancia_montaje:
-                                break
-                            await wait(5)
+                        # Montaje con PID de giroscopio (antes solo seguía con la última potencia)
+                        await _montaje_pid(target_heading, distancia_montaje, max_dc, kp, kd, sentido=-1)
                         break
             else:
                 lecturas_consecutivas = 0

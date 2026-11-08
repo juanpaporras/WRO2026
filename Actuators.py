@@ -1,3 +1,4 @@
+from Extras import boton
 from pybricks.pupdevices import Motor
 from pybricks.parameters import Port
 from pybricks.tools import wait, StopWatch
@@ -67,13 +68,17 @@ async def abrir_paletas():
     await servo(19, 30)  # abrir paletas
 
 async def abrir_garra():
-    await servo(20, 30)  # abrir garra
+    await wait (500)
+    #await servo(20, 30)  # abrir garra
 
 async def abrir_garra_todo():
-    await servo(20, 270)  # abrir garra
+    await wait (500)
+    #await servo(20, 260)  # abrir garra
 
 async def cerrar_garra():
-    await servo(20, 0)  # cerrar garra
+    await wait (500)
+    #await servo(20, 100)  # cerrar garra
 
 async def cerrar_garra_poquito():
-    await servo(20, 45)  # cerrar garra un poco
+    await wait (500)
+    #await servo(20, 45)  # cerrar garra un poco

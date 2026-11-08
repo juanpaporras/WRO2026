@@ -95,7 +95,7 @@ async def avance(target_heading, distancia_mm, max_dc=100.0, min_dc=16.0, accel_
     await wait(80) 
 
 
-async def retrocede(target_heading, distancia_mm, max_dc=100.0, min_dc=16.0, accel_mm=50.0, decel_mm=140.0, kp=3.5, kd=0.18):
+async def retrocede(target_heading, distancia_mm, max_dc=100.0, min_dc=30.0, accel_mm=50.0, decel_mm=140.0, kp=3.5, kd=0.18):  # Calibrar min_dc: potencia mínima (arranque y final); muy baja = le cuesta arrancar
     left_motor.reset_angle(0)
     right_motor.reset_angle(0)
 
@@ -159,6 +159,65 @@ async def retrocede(target_heading, distancia_mm, max_dc=100.0, min_dc=16.0, acc
     left_motor.hold()
     right_motor.hold()
     await wait(80)
+
+
+async def retrocede_hasta_pared(target_heading, dc=60.0, distancia_max=500.0, ignorar_mm=20.0, velocidad_stall=60.0, tiempo_stall=150, kp=2.0, nuevo_heading=None):
+    """Retrocede hasta chocar con una pared y frena (stall stop).
+
+    - dc: potencia del retroceso (Calibrar: suficiente para moverse, no tanta que rebote).
+    - distancia_max: seguridad; si no choca en esta distancia (mm), frena igual.
+    - ignorar_mm: no detecta choque en los primeros mm (al arrancar la velocidad es baja).
+    - velocidad_stall: si las ruedas van más lento que esto (grados/s) se considera choque.
+    - tiempo_stall: cuánto tiempo (ms) tienen que estar frenadas para confirmar el choque.
+    - nuevo_heading: si se da, reinicia el giroscopio a ese valor al chocar
+      (la pared deja el robot recto, sirve para corregir el error acumulado).
+    Devuelve True si chocó con la pared, False si llegó a distancia_max sin chocar.
+    """
+    left_motor.reset_angle(0)
+    right_motor.reset_angle(0)
+
+    DIAMETRO_RUEDA = 63.0
+    FACTOR_CONVERSION = (DIAMETRO_RUEDA * 3.141) / 360.0
+
+    cronometro_stall = StopWatch()
+    frenado = False
+    choco = False
+
+    while True:
+        recorrido = ((abs(left_motor.angle()) + abs(right_motor.angle())) / 2.0) * FACTOR_CONVERSION
+        if recorrido >= distancia_max:
+            break
+
+        # --- Detección de choque: las ruedas casi no giran aunque se les da potencia ---
+        velocidad = (abs(left_motor.speed()) + abs(right_motor.speed())) / 2.0
+        if recorrido > ignorar_mm and velocidad < velocidad_stall:
+            if not frenado:
+                frenado = True
+                cronometro_stall.reset()
+            elif cronometro_stall.time() >= tiempo_stall:
+                choco = True
+                break
+        else:
+            frenado = False
+
+        # --- Corrección de rumbo (mismo signo que avance/retrocede). kp bajo para que,
+        # al tocar la pared, el robot pueda enderezarse contra ella sin pelear con el gyro ---
+        error_ang = ((target_heading - hub.imu.heading() + 180) % 360) - 180
+        correccion = kp * error_ang
+        if frenado:
+            correccion = 0.0   # tocando la pared: deja que la pared lo enderece
+
+        left_motor.dc(max(min(-dc + correccion, 100.0), -100.0))
+        right_motor.dc(max(min(-dc - correccion, 100.0), -100.0))
+        await wait(10)
+
+    left_motor.hold()
+    right_motor.hold()
+    await wait(80)
+
+    if choco and nuevo_heading is not None:
+        hub.imu.reset_heading(nuevo_heading)
+    return choco
 
 
 async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, tolerancia=1, tiempo_estabilizacion=80):
@@ -227,17 +286,25 @@ async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, toler
     await wait(60)
 
 
-async def giro_pivot(target_heading, pivote_izquierdo=True, max_dc=80.0, min_dc=18.0, kp=2.2, kd=0.15, tolerancia=1, tiempo_estabilizacion=80):
-    error_previo = 0.0
+async def giro_pivot(target_heading, pivote_izquierdo=True, max_dc=80.0, min_dc=28.0, kp=2.2, kd=0.15, tolerancia=1, tiempo_estabilizacion=80, tiempo_max=3000):
+    # min_dc: Calibrar. En pivot UNA sola rueda arrastra todo el robot, necesita más potencia mínima que el giro normal.
+    # tiempo_max: seguridad (ms); si no llega al objetivo en ese tiempo, termina igual para no quedarse pegado.
+    # Arranca la derivada con el error real para evitar el golpe del primer ciclo
+    error_previo = ((target_heading - hub.imu.heading() + 180) % 360) - 180
     derivada_filtrada = 0.0
-    ALFA_FILTRO = 0.35 
+    ALFA_FILTRO = 0.35
 
     cronometro_lazo = StopWatch()
     cronometro_estabilizacion = StopWatch()
+    cronometro_total = StopWatch()
     cronometro_lazo.reset()
     cronometro_estabilizacion.reset()
-    
+
     estabilizando = False
+
+    # Anti-estancamiento: si el robot no se mueve, se va sumando potencia extra
+    empuje_extra = 0.0
+    heading_previo = hub.imu.heading()
 
     if pivote_izquierdo:
         left_motor.hold()
@@ -245,11 +312,21 @@ async def giro_pivot(target_heading, pivote_izquierdo=True, max_dc=80.0, min_dc=
         right_motor.hold()
 
     while True:
+        if cronometro_total.time() >= tiempo_max:
+            break
+
         dt = cronometro_lazo.time() / 1000.0
         cronometro_lazo.reset()
-        if dt <= 0: dt = 0.001
+        if dt <= 0.005: dt = 0.01
 
         heading_actual = hub.imu.heading()
+
+        # Si casi no giró desde el ciclo anterior, está estancado: sube el empuje poco a poco
+        if abs(heading_actual - heading_previo) < 0.2:
+            empuje_extra = min(empuje_extra + 1.0, 30.0)
+        else:
+            empuje_extra = max(empuje_extra - 2.0, 0.0)
+        heading_previo = heading_actual
         error_ang = target_heading - heading_actual
         error_ang = (error_ang + 180) % 360 - 180 
         abs_error = abs(error_ang)
@@ -283,8 +360,9 @@ async def giro_pivot(target_heading, pivote_izquierdo=True, max_dc=80.0, min_dc=
             salida_pd = termino_p + termino_d
             salida_aplicada = max(min(salida_pd, limite_dc), -limite_dc)
             
-            if abs(salida_aplicada) < min_dc:
-                salida_aplicada = min_dc if error_ang > 0 else -min_dc
+            minimo = min_dc + empuje_extra   # mínimo + extra si está estancado
+            if abs(salida_aplicada) < minimo:
+                salida_aplicada = minimo if error_ang > 0 else -minimo
 
             if pivote_izquierdo:
                 right_motor.dc(-salida_aplicada)

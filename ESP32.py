@@ -96,11 +96,17 @@ async def leer_husky():
 # =====================================
 # COMANDO ÚNICO "robot"
 # Recibe (pin, grados). pin <= 0 = no mover ningún servo.
-# Responde siempre 13 bytes: 12 casillas + estado
+# Responde (16 bytes, máximo de PUPRemote): (12 casillas, estado, pin_eco, grados_eco)
+#   pin_eco, grados_eco = ÚLTIMA orden de servo aplicada (el hub la compara
+#                         con lo que mandó y reenvía si no coincide)
 #   estado bit0 = 1 -> lectura de cámara completa
 #   estado bit1 = 1 -> el servo falló
 # =====================================
+ultimo_pin = 0
+ultimo_grados = 0
+
 async def robot(pin, grados):
+    global ultimo_pin, ultimo_grados
     servo_error = 0
     if pin > 0:
         try:
@@ -112,18 +118,20 @@ async def robot(pin, grados):
                 servos[pin].liberar_eje()
             else:
                 servos[pin].mover_a_posicion(grados)
+            ultimo_pin = pin
+            ultimo_grados = grados
         except Exception as e:
             sys.print_exception(e)
             servo_error = 1
 
     estado = grid_ok + 2 * servo_error
-    return tuple(grid) + (estado,)
+    return tuple(grid) + (estado, ultimo_pin, ultimo_grados)
 
 # =====================================
 # PUPREMOTE
 # =====================================
 pr = PUPRemoteSensor(sensor_id=SPIKE_ULTRASONIC, power=True)
-pr.add_command("robot", to_hub_fmt="13B", from_hub_fmt="hh")
+pr.add_command("robot", to_hub_fmt="<14Bh", from_hub_fmt="hh")   # debe ser IGUAL en Funciones_ESP32.py
 
 # =====================================
 # MAIN

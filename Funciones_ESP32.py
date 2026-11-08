@@ -14,7 +14,9 @@ def iniciar_esp32():
     """Llamar UNA vez ANTES de run_task(...) (no dentro de Run)."""
     global pr
     pr = PUPRemoteHub(Port.C)
-    pr.add_command("robot", to_hub_fmt="13B", from_hub_fmt="hh")   # mismo formato que el ESP32
+    # Diagnóstico: lo que anuncia el ESP32 -> debe decir ('robot', 16, ...). Si dice 13, el ESP32 tiene el código viejo.
+    print("ESP32 anuncia:", pr.pup_device.info()["modes"])
+    pr.add_command("robot", to_hub_fmt="<14Bh", from_hub_fmt="hh")   # mismo formato que el ESP32 (ESP32.py)
 
 async def proceso_esp32():
     """Tarea de fondo que procesa las llamadas al ESP32.
@@ -26,14 +28,25 @@ async def proceso_esp32():
 # COMUNICACIÓN
 # =====================================
 async def _llamar(pin, grados):
+    """Devuelve (pin_eco, grados_eco, grid, estado).
+    pin_eco/grados_eco = última orden de servo que el ESP32 aplicó de verdad."""
     d = await pr.call_multitask("robot", pin, grados, wait_ms=50)
-    return list(d[:12]), d[12]
+    # Formato "14Bh": 12 casillas, estado, pin_eco, grados_eco (16 bytes = máximo de PUPRemote)
+    return d[13], d[14], list(d[:12]), d[12]
 
-async def mover_servo(pin, grados):
+async def mover_servo(pin, grados, intentos=10):
     """pin = GPIO del ESP32, grados 0-270, -1 suelta el eje.
-    Devuelve True si el servo se ejecutó bien."""
-    _, estado = await _llamar(pin, grados)
-    return (estado & 2) == 0
+    Reenvía la orden hasta que el ESP32 confirme que la aplicó (si el servo
+    está forzando, una orden se puede perder). Devuelve True si se confirmó."""
+    for _ in range(intentos):
+        pin_eco, grados_eco, _, estado = await _llamar(pin, grados)
+        if estado & 2:
+            return False                         # el ESP32 reportó error del servo
+        if pin_eco == pin and grados_eco == grados:
+            return True                          # orden confirmada
+        await wait(50)                           # no llegó: reintenta
+    print("ESP32 no confirmó servo", pin, grados)
+    return False
 
 async def servo(pin, grados, espera_ms=300):
     """Mueve el servo y espera a que llegue (calibrar espera_ms)."""
@@ -61,7 +74,7 @@ async def leer_camara(timeout_ms=3000):
     Si no hay lectura en timeout_ms, devuelve listas vacías."""
     t = 0
     while True:
-        g, estado = await _llamar(0, 0)      # pin 0 = no mover servo
+        _, _, g, estado = await _llamar(0, 0)      # pin 0 = no mover servo
         if estado & 1:
             break
         if t >= timeout_ms:
