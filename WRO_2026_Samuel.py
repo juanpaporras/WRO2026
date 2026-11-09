@@ -41,10 +41,10 @@ izquierda, derecha, lado_rojo = [], [], -1
 SEPARACION_FILAS = 33   # Distancia entre las 2 filas de bloques de un mismo color (lado izq/der)
 PASO_COLUMNA = 45         # Distancia entre columnas de bloques (avanzar una "fila" hacia -90)
 VEL_RECOLECCION = 200     # Calibrar: velocidad (mm/s) al entrar a agarrar; más baja = se desliza menos al frenar
-EXTRA_RETROCESO = 55   # Calibrar: mm extra que retrocede MÁS de lo que avanzó, para quedar en el medio del carril y girar sin tocar los bloques
+EXTRA_RETROCESO = 63   # Calibrar: mm extra que retrocede MÁS de lo que avanzó, para quedar en el medio del carril y girar sin tocar los bloques
 DISTANCIA_MONTAJE = 65    # Calibrar: mm que avanza después de la línea cuando tiene que pasarse al otro lado (si es mucho, luego no encuentra la línea al seguirla)
-MONTAJE_SIN_CAMBIO = 14   # Calibrar: mm que avanza después de la línea cuando NO tiene que pasarse de lado
-DESCARGA_BLOQUE = 50     # Retroceso de "un bloque" en la zona de descarga
+MONTAJE_SIN_CAMBIO = 18   # Calibrar: mm que avanza después de la línea cuando NO tiene que pasarse de lado
+DESCARGA_BLOQUE = 49     # Retroceso de "un bloque" en la zona de descarga
 DESCARGA_AVANCE = 60      # Del carril hasta la zona de descarga
 # Rojo: cuadro gris arriba a la derecha, pasando la calle gris vertical.
 # Desde el centro del carril (fila de abajo de los blancos) está a ~300 mm hacia 90 y ~150 mm hacia 0.
@@ -69,7 +69,7 @@ async def logica_de_recoleccion():
     heading_avance = -90
     if avanzar >= 1:
         heading_avance = -85 if lado_posicion_actual == 1 else -95
-        await avance(heading_avance, PASO_COLUMNA * avanzar) #Calibrar para que el robot avance a la siguiente fila de bloques
+        await avance(heading_avance, PASO_COLUMNA * avanzar,60) #Calibrar para que el robot avance a la siguiente fila de bloques
     await cerrar_garra()
     #Calcula cuantas filas de bloques avanzo para retroceder lo mismo
     #Calibrar para que el robot retroceda hasta llegar a la linea
@@ -92,9 +92,9 @@ async def logica_de_movimiento(objetivo, lado_posicion_objetivo):
         # Solo se monta si tiene que pasarse al otro lado de la línea; si no, frena apenas la detecta.
         await avance_contando_lineas(
             heading_objetivo, movimiento,
-            distancia_ignorar=25, min_sensores_linea=3,
+            distancia_ignorar=50, min_sensores_linea=2,
             montarse=True, distancia_montaje=DISTANCIA_MONTAJE if montarse_final else MONTAJE_SIN_CAMBIO,  # Calibrar: distancia para pasar la línea y alinearse con los bloques del otro lado
-            max_dc=80, dc_aproximacion=40                   # Calibrar: velocidad crucero y velocidad al llegar a la última línea
+            max_dc=80, dc_aproximacion=40  # Calibrar: velocidad crucero y velocidad al llegar a la última línea
         )
         if lado_posicion_objetivo==0:
             lado_posicion_actual = 1
@@ -129,38 +129,36 @@ async def llevar_a_descarga():
 
     if orientacion_retroceso == 1:
         if llevadas == 2:
-            await boton()
-            await retrocede(180, 20) #Calibrar para que el robot retroceda un bloque
+            await retrocede(180, 24) #Calibrar para que el robot retroceda un bloque
             print("llevadas = 2, retrocediendo 1 bloque")
         elif llevadas == 0:
             await retrocede(180, DESCARGA_BLOQUE * 2) #Calibrar para que el robot retroceda dos bloques
             print("llevadas = 0, retrocediendo 2 bloques")
     else:
         if llevadas == 2:
-            await retrocede(0, 22) #Calibrar para que el robot retroceda un bloque
+            await retrocede(0, 24) #Calibrar para que el robot retroceda un bloque
             print("llevadas = 2, retrocediendo 1 bloque")
         elif llevadas == 1:
             await retrocede(0, DESCARGA_BLOQUE * 2) #Calibrar para que el robot retroceda dos bloques
             print("llevadas = 1, retrocediendo 2 bloques")
     await giro(90)
     if llevadas == 2:
-        await avance_hasta_linea(90, distancia_ignorar=0, min_sensores_linea=2, max_dc=40) #Calibrar para que el robot avance hasta la línea de descarga
+        await avance_hasta_linea(90, distancia_ignorar=0, min_sensores_linea=4, max_dc=40,esperar_blanco=False) #Calibrar para que el robot avance hasta la línea de descarga
         await seguir_linea_distancia (distancia_mm=DESCARGA_AVANCE, vel_crucero_mm_s=300) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
     elif lado_posicion_actual == 0:
-       await avance_hasta_linea(90, distancia_ignorar=0, min_sensores_linea=2, max_dc=40, montarse=True, distancia_montaje=DESCARGA_AVANCE) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
+       await avance_hasta_linea(90, distancia_ignorar=0, min_sensores_linea=4, max_dc=40, montarse=True, distancia_montaje=DESCARGA_AVANCE,esperar_blanco=False) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
     else:
-        await avance_hasta_linea(90, distancia_ignorar=0, min_sensores_linea=2, max_dc=40, montarse=True, distancia_montaje=DESCARGA_AVANCE) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
+        await avance_hasta_linea(90, distancia_ignorar=0, min_sensores_linea=4, max_dc=40, montarse=True, distancia_montaje=DESCARGA_AVANCE,esperar_blanco=False) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
     if llevadas != 2:
         await abrir_garra_todo()
-        await retrocede(90, DESCARGA_AVANCE+EXTRA_RETROCESO-48) #Calibrar para que el robot retroceda hasta pasarse de la linea y para girar hacia arriva
-        await giro (180)
-        await retrocede_hasta_pared(180, distancia_max = 1000) #Calibrar para que el robot retroceda hasta pasarse de la linea y para girar hacia arriva
+        await retrocede(90, DESCARGA_AVANCE-5) #Calibrar para que el robot retroceda hasta pasarse de la linea y para girar hacia arriva
+        await giro (-173)
+        await retrocede_hasta_pared(-173, distancia_max = 1000) #Calibrar para que el robot retroceda hasta pasarse de la linea y para girar hacia arriva
         await wait (100)
         hub.imu.reset_heading(180)
         await avance_hasta_linea(180, distancia_ignorar=40, min_sensores_linea=2, max_dc=38, montarse=True, distancia_montaje=MONTAJE_SIN_CAMBIO) #Calibrar para que el robot avance hasta la línea de descarga
         posicion_actual = 4
         lado_posicion_actual = 1 #El robot está en la posición 4 y lado derecho
-
 
 async def agarrar_rojo():
     global posicion_actual, lado_posicion_actual
@@ -172,9 +170,8 @@ async def agarrar_rojo():
     await giro_pivot(57, pivote_izquierdo=True)
     await avance(57, ROJO_AVANCE_50, max_dc=70) #Calibrar para que el robot avance hasta agarrar el rojo
     await cerrar_garra()
-    await retrocede(57, ROJO_AVANCE_50+ 15) #Calibrar para que el robot retroceda lo mismo que avanzó para agarrar el rojo\
-    await giro (90)
-    await retrocede (90,25)
+    await retrocede(57, ROJO_AVANCE_50+ 20) #Calibrar para que el robot retroceda lo mismo que avanzó para agarrar el rojo\
+    await giro_pivot(90, pivote_izquierdo=True)
     posicion_actual = 4 #El robot está en la posición 4 y lado izquierdo
     lado_posicion_actual = 0 #El robot está en la posición 4 y lado izquierdo
 
@@ -219,6 +216,13 @@ async def resolver_lecturas():
             """
             await agarrar_rojo()
             contador += 1
+            if contador >1:
+                """
+                Si con el rojo ya completó 2, también lleva a la zona de descarga
+                """
+                await llevar_a_descarga()
+                llevadas += 1
+                contador =0
 
 
 # ---------------------------------------------------------
@@ -425,7 +429,7 @@ async def Ruta_prueba_logica():
 
     # 1 = Amarillo, 2 = Azul, 3 = Verde, 4 = Blanco, 5 = Rojo
     # Recorrido esperado: amarillo -> azul -> descarga -> rojo -> verde
-    lectura = [5, 4, 4, 3, 3, 4]   # Lectura ficticia, cambiarla para probar otros casos
+    lectura = [1, 5, 3, 1, 2, 4]   # Lectura ficticia, cambiarla para probar otros casos
 
     colores = {1: 6, 2: 6, 3: 6, 4: 6}   # Reinicia la cantidad de bloques por color
     posicion_actual = 0                  # 0 = línea de abajo (inicio)
