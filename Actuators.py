@@ -2,7 +2,7 @@ from Extras import boton
 from pybricks.pupdevices import Motor
 from pybricks.parameters import Port
 from pybricks.tools import wait, StopWatch
-from Funciones_ESP32 import servo
+from Funciones_ESP32 import servo, mover_servo
 # =============================================================================
 # INICIALIZACIÓN DE MOTORES DE ACCESORIOS
 # =============================================================================
@@ -53,31 +53,39 @@ async def bajar_elevador():
     await motor_dc_por_segundos(motorElevador, 1000, -60)
 
 async def bajar_cuadro():
-    await motor_dc_por_grados(motorcuadro, 400, -80)
+    await motor_dc_por_segundos(motorcuadro, 1000, -90)  # calibrar
 
 async def subir_cuadro():
-    await motor_dc_por_segundos(motorcuadro, 1500, 90)
+    await motor_dc_por_grados(motorcuadro, 300, 90)  # calibrar
 
 async def cerrar_cuadro():
     await motor_dc_por_grados(motorcuadro, -400, 80)  # calibrar
 
 async def cerrar_paletas():
-    await servo(19, 270)  # cerrar paletas
+    await servo(19, 260)  # cerrar paletas
 
 async def abrir_paletas():
     await servo(19, 30)  # abrir paletas
 
 async def abrir_garra():
-    await wait (500)
-    #await servo(20, 30)  # abrir garra
+    await servo(20, 150)  # abrir garra
+
+# La garra abierta empuja contra su tope (a propósito, para tensar las ligas).
+# Si se le pide un ángulo MUY pasado del tope, el servo queda trabado a toda fuerza,
+# se calienta y su protección interna lo bloquea: al cerrar solo zumba.
+# Por eso se le pide apenas unos grados más allá del tope: hace fuerza, pero poca.
+# Probado con prueba_servo.py: a 95 hace los 20 ciclos; a 90 el servo no vence las ligas y se bloquea.
+GARRA_TOQUE = 95         # Calibrar: apertura máxima sin que el servo se bloquee (probar 93-94)
+GARRA_PRECARGA = 0       # Calibrar: grados extra (más = más riesgo de bloqueo)
+GARRA_CERRADA = 230      # Calibrar: garra cerrada
 
 async def abrir_garra_todo():
-    await wait (500)
-    #await servo(20, 260)  # abrir garra
+    await servo(20, GARRA_TOQUE - GARRA_PRECARGA)  # abrir garra contra el tope
 
 async def cerrar_garra():
-    await wait (500)
-    #await servo(20, 100)  # cerrar garra
+    # Pasa directo de abierta a cerrada (sin soltar el eje), igual que en prueba_servo.py
+    # con SOLTAR = "no", que fue lo que funcionó los 20 ciclos.
+    await servo(20, GARRA_CERRADA, espera_ms=350)  # Calibrar: tiempo de cierre
 
 async def cerrar_garra_poquito():
     await wait (500)

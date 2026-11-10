@@ -145,10 +145,10 @@ async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, k
     
     if lado == "izquierda":
         umbral_interseccion = 6
-        setpoint = -8.0
+        setpoint = -7.0
     elif lado == "derecha": 
         umbral_interseccion = 6
-        setpoint = 8.0 
+        setpoint = 7.0 
     else: 
         setpoint = 0.0  
         

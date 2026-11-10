@@ -30,6 +30,10 @@ async def proceso_esp32():
 async def _llamar(pin, grados):
     """Devuelve (pin_eco, grados_eco, grid, estado).
     pin_eco/grados_eco = última orden de servo que el ESP32 aplicó de verdad."""
+    # Si Run() llama al ESP32 justo al arrancar, proceso_esp32() aún no ha empezado:
+    # espera a que process_async esté corriendo antes de llamar.
+    while not pr._multitask_loop_running:
+        await wait(10)
     d = await pr.call_multitask("robot", pin, grados, wait_ms=50)
     # Formato "14Bh": 12 casillas, estado, pin_eco, grados_eco (16 bytes = máximo de PUPRemote)
     return d[13], d[14], list(d[:12]), d[12]
@@ -41,7 +45,9 @@ async def mover_servo(pin, grados, intentos=10):
     for _ in range(intentos):
         pin_eco, grados_eco, _, estado = await _llamar(pin, grados)
         if estado & 2:
-            return False                         # el ESP32 reportó error del servo
+            # el ESP32 no pudo mover el servo (pin inválido o error de PWM)
+            print("ESP32: ERROR al mover servo", pin, grados, "(ver consola del ESP32)")
+            return False
         if pin_eco == pin and grados_eco == grados:
             return True                          # orden confirmada
         await wait(50)                           # no llegó: reintenta

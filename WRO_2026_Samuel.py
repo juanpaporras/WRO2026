@@ -2,7 +2,7 @@ from pybricks.tools import wait, run_task, multitask
 
 # Importación de módulos propios organizados
 from GyroMovement import hub, left_motor, right_motor, avance, retrocede, retrocede_hasta_pared, giro, giro_pivot
-from Line_sensors import diagnostico_espectral_mbc, seguir_linea_distancia, seguir_linea_hasta_interseccion, avance_hasta_linea, avance_contando_lineas, retrocede_hasta_linea
+from Line_sensors import sensor_mbc, diagnostico_espectral_mbc,seguir_linea_distancia, seguir_linea_hasta_interseccion, avance_hasta_linea, avance_contando_lineas, retrocede_hasta_linea
 from Actuators import (
     motorElevador, motorcuadro, 
     subir_elevador_todo, subir_elevador, bajar_elevador, 
@@ -56,9 +56,73 @@ async def lectura_camara():
     global izquierda, derecha, lado_rojo
     izquierda, derecha, lado_rojo, _, _, _ = await leer_camara()
 
+ANGULO_BUSQUEDA = 10   # Calibrar: cuánto se desvía de -90 para buscar la línea (-100 desde la derecha, -80 desde la izquierda)
+SIGNO_ERROR_MBC = 1    # Si al probar busca la línea cuando NO debe (o al revés), cambiar a -1
+
+DC_BUSQUEDA = 35              # Calibrar: potencia al buscar la línea (lento para no pasarse)
+DISTANCIA_MAX_BUSQUEDA = 120  # Calibrar: seguridad (mm); si no encuentra la línea real, deja de buscar
+MM_POR_GRADO = (63.0 * 3.141) / 360.0   # Rueda de 63 mm
+AVANCE_MIN_BUSQUEDA = 10      # Calibrar: grados de rueda que avanza SIEMPRE tras el giro de búsqueda antes de poder detenerse (10° ≈ 5.5 mm)
+
+async def ve_linea_real():
+    """True si el sensor ve la línea Y el error la ubica del lado correcto según
+    lado_posicion_actual. Si el error haría corregir hacia el lado contrario, es una
+    línea ficticia (gris de la mesa) y cuenta como que NO ve la línea.
+    Seguidor: turn_rate = -kp*error -> error > 0 corrige a la IZQUIERDA (motor derecho
+    con más potencia), error < 0 corrige a la DERECHA."""
+    await sensor_mbc.actualizar_lectura()
+    if int(sensor_mbc.ancho_linea) == 0:
+        return False
+    error = sensor_mbc.error_espacial * SIGNO_ERROR_MBC
+    if lado_posicion_actual == 1:
+        return error > 0   # derecha de la línea: la línea debe quedar a su izquierda
+    else:
+        return error < 0   # izquierda de la línea: la línea debe quedar a su derecha
+
+async def buscar_linea_recoleccion():
+    """Mirando a -90: si el sensor está completamente fuera de la línea, gira hacia
+    el lado donde debe estar la línea, avanza hasta encontrarla y vuelve a -90.
+    - Lado derecho (1): la línea queda a su izquierda -> gira a -100.
+    - Lado izquierdo (0): la línea queda a su derecha -> gira a -80."""
+    if await ve_linea_real():
+        return   # ve la línea del lado correcto, no hace falta buscarla
+
+    if lado_posicion_actual == 1:
+        heading_busqueda = -90 - ANGULO_BUSQUEDA   # -100
+    else:
+        heading_busqueda = -90 + ANGULO_BUSQUEDA   # -80
+
+    await giro(heading_busqueda)
+
+    # Avanza recto (giroscopio) hasta ver la línea REAL. No usa avance_hasta_linea porque esa
+    # se detiene con cualquier negro, incluida la línea ficticia del gris.
+    left_motor.reset_angle(0)
+    right_motor.reset_angle(0)
+    while True:
+        recorrido = ((left_motor.angle() + right_motor.angle()) / 2.0) * MM_POR_GRADO
+        if recorrido >= DISTANCIA_MAX_BUSQUEDA:
+            print("No encontró la línea real")
+            break
+        grados_ruedas = (left_motor.angle() + right_motor.angle()) / 2.0
+        if grados_ruedas >= AVANCE_MIN_BUSQUEDA and await ve_linea_real():
+            break
+        if grados_ruedas >= AVANCE_MIN_BUSQUEDA and int(sensor_mbc.ancho_linea) >= 6:
+            # Con un ángulo tan suave puede llegar a la línea vertical (intersección) antes
+            # de encontrar la línea: para ahí para no meterse en los bloques.
+            print("Llegó a la intersección buscando la línea")
+            break
+        error_ang = ((heading_busqueda - hub.imu.heading() + 180) % 360) - 180
+        correccion = 3.5 * error_ang
+        left_motor.dc(max(min(DC_BUSQUEDA + correccion, 100.0), -100.0))
+        right_motor.dc(max(min(DC_BUSQUEDA - correccion, 100.0), -100.0))
+        await wait(10)
+    left_motor.hold()
+    right_motor.hold()
+    await giro(-90)
 
 async def logica_de_recoleccion():
     await multitask(giro(-90), abrir_garra_todo())
+    await buscar_linea_recoleccion()   # Si el sensor no ve la línea, la busca según el lado antes de seguirla
     if lado_posicion_actual == 0: #Si el robot está en el lado izquierdo, avanza hasta la línea y se monta sobre ella, esta distancia es suficiente para que el robot agarre la primera fila
         await seguir_linea_hasta_interseccion("izquierda", montarse=False, target_heading=-90, vel_crucero_mm_s=VEL_RECOLECCION)
     else:
@@ -66,14 +130,22 @@ async def logica_de_recoleccion():
     avanzar =(6 - colores[lectura[i]]) // 2 #Calcula cuantas filas de bloques hay que avanzar para llegar al bloque objetivo
     # Lado derecho (1) avanza hacia -85, lado izquierdo (0) hacia -95 (Calibrar).
     # Si no avanza columnas se queda en -90. El retroceso usa el mismo ángulo para volver al mismo punto.
+    # Con 2 avances (quedan 1 o 2 bloques), el PRIMER avance va recto a -90 y solo el segundo en diagonal.
     heading_avance = -90
+    avances_rectos = 0   # cuántas columnas avanzó a -90 (para retrocederlas también a -90)
     if avanzar >= 1:
         heading_avance = -85 if lado_posicion_actual == 1 else -95
-        await avance(heading_avance, PASO_COLUMNA * avanzar,60) #Calibrar para que el robot avance a la siguiente fila de bloques
+        if avanzar >= 2:
+            avances_rectos = avanzar - 1
+            await avance(-90, PASO_COLUMNA * avances_rectos, 60) #Calibrar: primer avance recto a -90
+        await avance(heading_avance, PASO_COLUMNA+10, 60) #Calibrar para que el robot avance a la siguiente fila de bloques
     await cerrar_garra()
     #Calcula cuantas filas de bloques avanzo para retroceder lo mismo
     #Calibrar para que el robot retroceda hasta llegar a la linea
-    await retrocede(heading_avance, PASO_COLUMNA * avanzar + EXTRA_RETROCESO, max_dc=70, accel_mm=80) #Calibrar (max_dc/accel_mm: arranque más suave para que no cabecee) para que el robot retroceda hasta llegar a media linea para poder girar y avanzar hasta la línea de del siguiente color objetivo
+    # Retrocede en orden inverso: primero el tramo en diagonal, luego el recto a -90 + el extra
+    if avanzar >= 1:
+        await retrocede(heading_avance, PASO_COLUMNA, max_dc=70, accel_mm=80) #Calibrar: deshace el avance en diagonal
+    await retrocede(-90, PASO_COLUMNA * avances_rectos + EXTRA_RETROCESO, max_dc=70, accel_mm=80) #Calibrar (max_dc/accel_mm: arranque más suave para que no cabecee) para que el robot retroceda hasta llegar a media linea para poder girar y avanzar hasta la línea de del siguiente color objetivo
     colores[lectura[i]] -= 1 #Resta uno a la cantidad de bloques del color objetivo
 
 async def logica_de_movimiento(objetivo, lado_posicion_objetivo):
@@ -103,14 +175,14 @@ async def logica_de_movimiento(objetivo, lado_posicion_objetivo):
         posicion_actual = lectura[i]
     else:
         if lado_posicion_objetivo == 0 and lado_posicion_actual == 0: #Si tiene que ir a la derecha y el robot está en el lado izquierdo, gira a la derecha
-            await giro(0)
-            await avance(0, SEPARACION_FILAS) #Calibrar para que el robot se pase de izquierda a derecha
+            await giro(5)
+            await avance(5, SEPARACION_FILAS) #Calibrar para que el robot se pase de izquierda a derecha
             lado_posicion_actual = 1
             posicion_actual = lectura[i]
 
         elif lado_posicion_objetivo != 0 and lado_posicion_actual == 1: #Si tiene que ir a la izquierda y el robot está en el lado derecho, gira a la izquierda
-            await giro(180)
-            await avance(180, SEPARACION_FILAS) #Calibrar para que el robot se pase de derecha a izquierda
+            await giro(175)
+            await avance(175, SEPARACION_FILAS) #Calibrar para que el robot se pase de derecha a izquierda
             lado_posicion_actual = 0
             posicion_actual = lectura[i]
 
@@ -129,19 +201,19 @@ async def llevar_a_descarga():
 
     if orientacion_retroceso == 1:
         if llevadas == 2:
-            await retrocede(180, 24) #Calibrar para que el robot retroceda un bloque
+            await retrocede(180, 35, 60) #Calibrar para que el robot retroceda un bloque
             print("llevadas = 2, retrocediendo 1 bloque")
         elif llevadas == 0:
-            await retrocede(180, DESCARGA_BLOQUE * 2) #Calibrar para que el robot retroceda dos bloques
+            await retrocede(180, DESCARGA_BLOQUE * 2, 60) #Calibrar para que el robot retroceda dos bloques
             print("llevadas = 0, retrocediendo 2 bloques")
     else:
         if llevadas == 2:
-            await retrocede(0, 24) #Calibrar para que el robot retroceda un bloque
+            await retrocede(0, 35, 60) #Calibrar para que el robot retroceda un bloque
             print("llevadas = 2, retrocediendo 1 bloque")
         elif llevadas == 1:
-            await retrocede(0, DESCARGA_BLOQUE * 2) #Calibrar para que el robot retroceda dos bloques
+            await retrocede(0, DESCARGA_BLOQUE * 2, 60) #Calibrar para que el robot retroceda dos bloques
             print("llevadas = 1, retrocediendo 2 bloques")
-    await giro(90)
+    await giro(90, 80)
     if llevadas == 2:
         await avance_hasta_linea(90, distancia_ignorar=0, min_sensores_linea=4, max_dc=40,esperar_blanco=False) #Calibrar para que el robot avance hasta la línea de descarga
         await seguir_linea_distancia (distancia_mm=DESCARGA_AVANCE, vel_crucero_mm_s=300) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
@@ -152,8 +224,8 @@ async def llevar_a_descarga():
     if llevadas != 2:
         await abrir_garra_todo()
         await retrocede(90, DESCARGA_AVANCE-5) #Calibrar para que el robot retroceda hasta pasarse de la linea y para girar hacia arriva
-        await giro (-173)
-        await retrocede_hasta_pared(-173, distancia_max = 1000) #Calibrar para que el robot retroceda hasta pasarse de la linea y para girar hacia arriva
+        await giro (-176)
+        await retrocede_hasta_pared(-176, distancia_max = 1000) #Calibrar para que el robot retroceda hasta pasarse de la linea y para girar hacia arriva
         await wait (100)
         hub.imu.reset_heading(180)
         await avance_hasta_linea(180, distancia_ignorar=40, min_sensores_linea=2, max_dc=38, montarse=True, distancia_montaje=MONTAJE_SIN_CAMBIO) #Calibrar para que el robot avance hasta la línea de descarga
@@ -257,168 +329,63 @@ async def dejar_bloques_2():
 # ---------------------------------------------------------
 # RUTAS DE COMPETICIÓN 
 # ---------------------------------------------------------
-async def Ruta_1_recoger_bloques():
-    hub.imu.reset_heading(0)
-    await multitask(avance(0, 202), bajar_elevador())
-    await cerrar_garra()
-    await wait(800)
-    await subir_elevador()
-    await retrocede(0, 85)
-        
-async def Ruta_2_recoger_ladrillos_blancos():
+async def Ruta_1_Lectura(): #Se acomoda de la salida y sigue linea hasta interseccion para llegar a leer, la distancia de montaje debe ser para que quede en el centro de la linea, gire se tire hacia atras y choque con el mosaico. Ahi ya hace la lectura
+    await avance(0, 100, 80)
     await giro(90)
-    await avance(90, 136)
-    await seguir_linea_distancia(1250)
-    await wait(200)
-    await giro(173)
-    await giro(-90)
-    await multitask(retrocede(-90, 220), bajar_cuadro())
-    await cerrar_cuadro()
-
-async def Ruta_3_llevar_ladrillos_blancos(angulo_giro):
-    await avance_hasta_linea(-70, distancia_ignorar=82, min_sensores_linea=1)
-    await giro(2)
-    await seguir_linea_hasta_interseccion("derecha", centrado_estricto=True, target_heading=0)
-    await giro(angulo_giro)
-    await wait(100)
-    await retrocede(angulo_giro, 693)
-    await giro_pivot(92, pivote_izquierdo=False)
-    await retrocede(90, 16)
-    await avance(90, 16)
-    await subir_cuadro()
-    
-async def Ruta_4_recoger_verdes():
-    await giro_pivot(136, pivote_izquierdo=False)
-    await avance(136, 248)
-    await giro(90)
-    await seguir_linea_hasta_interseccion(montarse=False)
-    hub.imu.reset_heading(90)
-    await giro(-90)
-    await multitask(retrocede(-90, 200), bajar_cuadro())
-    await cerrar_cuadro()
-
-async def Ruta_5_llevar_bloques():
-    await seguir_linea_distancia(450)
-    await seguir_linea_hasta_interseccion(montarse=False)
-    global heading_temporal
-    heading_temporal = hub.imu.heading()
-    await avance(heading_temporal, 273)
-    left_motor.hold()
-    right_motor.hold()
-    await wait(50)
-    hub.imu.reset_heading(-90)
-
-async def Ruta_6_llevar_ladrillos_verdes():
-    await multitask(retrocede(-90, 305), cerrar_garra())
-    await giro(90)
-    await multitask(subir_cuadro(), retrocede(90, 200))
-
-async def Ruta_7_recoger_ladrillos_amarillos():
-    await seguir_linea_distancia(400)
-    await seguir_linea_hasta_interseccion(montarse=True, target_heading=90, distancia_montaje=110)
-    await giro(180)
-    await bajar_cuadro()
-    await retrocede(180, 200)
-    await cerrar_cuadro()
-
-async def Ruta_8_llevar_ladrillos_amarillos():
-    await avance_hasta_linea(-110, distancia_ignorar=27)
-    await wait(300)
-    await giro(180)
-    await seguir_linea_distancia(200)
-    await seguir_linea_hasta_interseccion("derecha", target_heading=180)
-    await wait(100)
-    await giro(-90)
-    await seguir_linea_distancia(400)
-    await seguir_linea_hasta_interseccion(target_heading=-90)
-    await giro(180)
-    await multitask(subir_cuadro(), retrocede(180, 131))  
-
-async def Ruta_9_Recoger_y_llevar_YACUZY():
-    await seguir_linea_hasta_interseccion(montarse=False)
+    await avance(90, 200, 80,freno=False)
+    await seguir_linea_distancia(distancia_mm=500, vel_crucero_mm_s=700)
+    await seguir_linea_hasta_interseccion("centro", target_heading=90, vel_crucero_mm_s=400, montarse=True, distancia_montaje=41)
     await giro(0)
-    await bajar_cuadro()
-    await retrocede(0, 76)
-    await motor_dc_por_segundos(motorcuadro, 1000, 100)
-    motorcuadro.hold()
-    await avance(0, 22)
-    await giro(90)
-    await seguir_linea_distancia(480)
-    hub.imu.reset_heading(90)
-    await giro_pivot(-5, pivote_izquierdo=True)
-    await giro_pivot(89, pivote_izquierdo=False)
-    await avance(89, 49)
-
-async def Ruta_10_recoger_ladrillos_azules():
-    await multitask(avance(90, 60), subir_cuadro())
-    await giro(-90)
-    await multitask(retrocede(-90, 150), bajar_cuadro())
-    await cerrar_cuadro()
-
-async def Ruta_11_Recoger_pala():
-    await seguir_linea_hasta_interseccion(target_heading=-90, montarse=False)
-    await giro(-177)
-    await multitask(seguir_linea_hasta_interseccion("izquierda", montarse=False, target_heading=180), abrir_garra_todo())
-    
-    await multitask(avance(180, 545), subir_elevador_todo())
+    await seguir_linea_hasta_interseccion("centro", target_heading=0, vel_crucero_mm_s=200)
+    hub.imu.reset_heading(0)
+    await giro(-179,80)
+    await retrocede_hasta_pared(180, distancia_max=1000, dc=50)
     hub.imu.reset_heading(180)
-    await retrocede(180, 150)
-    await multitask(cerrar_garra(), bajar_elevador())
-    await giro_pivot(-95, False)
-    
-    await multitask(avance(-95, 164), abrir_garra(), motor_dc_por_grados(motorElevador, 140, 100))
-    await cerrar_garra()
-    await avance(-110, 27)
-    await avance(-90, 709)
-    await retrocede(-90, 82)
-    await avance_hasta_linea(-60, distancia_ignorar=164, montarse=True)
-    await giro(-90)
 
-async def Ruta_12_llevar_pala():
-    await seguir_linea_distancia(100)
-    await seguir_linea_hasta_interseccion(montarse=False)
-    await giro(-120)
-    await multitask(abrir_garra(), subir_elevador_todo())
-    await giro(-90)
+async def Ruta_2_Recoger_y_llevar_cemento():      
+    await avance(180, 150, 80)
+    await seguir_linea_distancia(distancia_mm=75, vel_crucero_mm_s=300)
+    await giro(1)
+    await bajar_cuadro()
+    await giro(90)
+    await seguir_linea_distancia(distancia_mm=500, vel_crucero_mm_s=500)
+    await giro_pivot(0, pivote_izquierdo=True)
+    await giro_pivot(90, pivote_izquierdo=False)
+    await subir_cuadro()
+    await seguir_linea_distancia(distancia_mm=50, vel_crucero_mm_s=300)
 
-async def Ruta_13_recoger_bloques_2():
-    await multitask(retrocede(-90, 142), motor_dc_por_grados(motorgarras, 40, 100))
-    await giro_pivot(0, False)
-    await wait(200)
-    await avance_hasta_linea(0, distancia_ignorar=0)
-    await avance(0, 16)
-    await wait(200)
-    await giro(-90)
-    await wait(100)
-    await seguir_linea_hasta_interseccion("izquierda", montarse=False)
-    await wait(100)
-    await avance(-90, 169)
-    await giro(0.3)
-    await bajar_elevador()
-    global heading_temporal
-    heading_temporal = hub.imu.heading()
-    await avance(heading_temporal, 71)
-    await cerrar_garra()
-    await wait(800)
-    await subir_elevador()
-
-async def Ruta_14_llevar_bloques_2():
-    await avance(50, 191)
-    await avance(85, 191)
-    await seguir_linea_hasta_interseccion(montarse=False)
-    heading_temporal = hub.imu.heading()
-    await avance(heading_temporal, 218)
-    left_motor.hold()
-    right_motor.hold()
-    await wait(50)
+async def Ruta_3_recoger_ladrillos_azules():  # --> RUTA EN PROCESO
+    await giro(-89)
+    await abrir_paletas() 
+    await boton()
+    await retrocede(-90, 180)
+    await boton()
+    await cerrar_paletas()
+    await seguir_linea_hasta_interseccion("centro", target_heading=-90, vel_crucero_mm_s=400, montarse=False)
+    await giro(0)
+    await retrocede_hasta_pared(0, dc= 70)
+    hub.imu.reset_heading(0)
+    await avance(0, 170)
+    await giro(90)
+    await retrocede(90, 200)
+    await bajar_cuadro()
+    await retrocede(90, 1250)
+    await avance(90, 100)
+    await giro(135)
+    await retrocede(135, 80)
+    await giro(90)
+    await retrocede_hasta_pared(90, 60)
     hub.imu.reset_heading(90)
+    await avance(90, 400)
+    await giro_pivot(45, pivote_izquierdo= False)
+    await subir_cuadro()
+    await giro_pivot(90, pivote_izquierdo= False)
+    await giro(0)
+    await retrocede_hasta_pared(0, 60)
+    await avance_hasta_linea(0)
+    hub.imu.reset_heading(0)
 
-async def Ruta_15_llevar_azules():
-    await retrocede(90, 324)
-    await giro(-90)
-    await retrocede(-90, 55)
-    await multitask(subir_cuadro(), retrocede(-90, 115))
-
+#async def Ruta_3__Comerce_Azules():
 # ---------------------------------------------------------
 # RUTA DE PRUEBA DE LA LÓGICA (lectura ficticia con rojo)
 # Posición inicial: línea de abajo, lado izquierdo (abajo), mirando a 0.
@@ -429,7 +396,7 @@ async def Ruta_prueba_logica():
 
     # 1 = Amarillo, 2 = Azul, 3 = Verde, 4 = Blanco, 5 = Rojo
     # Recorrido esperado: amarillo -> azul -> descarga -> rojo -> verde
-    lectura = [1, 5, 3, 1, 2, 4]   # Lectura ficticia, cambiarla para probar otros casos
+    lectura = [2, 2, 2, 5, 2, 2 ]   # Lectura ficticia, cambiarla para probar otros casos
 
     colores = {1: 6, 2: 6, 3: 6, 4: 6}   # Reinicia la cantidad de bloques por color
     posicion_actual = 0                  # 0 = línea de abajo (inicio)
@@ -439,6 +406,7 @@ async def Ruta_prueba_logica():
     await resolver_lecturas()
 
 # Inicio del Run principal
+
 async def Run():
     voltaje = (hub.battery.voltage() / 1000.0)
     print(voltaje)
@@ -446,27 +414,14 @@ async def Run():
         await hub.speaker.beep(1000, 50) 
     await hub.speaker.beep(1000, 50)
     await advertencia_bateria(await boton())
-    hub.imu.reset_heading(0)
-    # await seguir_linea_hasta_interseccion(vel_crucero_mm_s=200, lado="derecha", montarse=False)
-    # await giro(0)
-    #await diagnostico_espectral_mbc ()
-    await Ruta_prueba_logica()
+    hub.imu.reset_heading(0) 
 
-    # luego aquí van tus rutas:
-    # await Ruta_1_recoger_bloques()
-    # await Ruta_2_recoger_ladrillos_blancos()
+    """await Ruta_1_Lectura()
+    await Ruta_2_Recoger_y_llevar_cemento()
+    await Ruta_3_recoger_ladrillos_azules()"""
+    await medir_trayectos_manual()  # Mide los trayectos y los guarda en la memoria del hub
+    #await Ruta_prueba_logica()
 
-    # voltaje = (hub.battery.voltage() / 1000.0)
-    # print(voltaje)
-    # if float(voltaje) <= 7.9 or voltaje > 8.3:
-    #     await hub.speaker.beep(1000, 50) 
-        
-    # await multitask(subir_cuadro(), subir_elevador_todo())
-    # hub.imu.reset_heading(0)
-    # await avance(0, 1000)
-    # await giro(180)
-    # await avance(180, 1000)
-    
 
 iniciar_esp32()   # debe ir ANTES de run_task
 # race=True: el programa termina cuando Run() termina (proceso_esp32 corre para siempre)

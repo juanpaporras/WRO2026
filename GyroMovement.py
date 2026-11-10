@@ -31,7 +31,10 @@ def normalizar_error_angular(error):
 # FUNCIONES DE MOVIMIENTO Y GIROS (CONTROL DC + PD)
 # =============================================================================
 
-async def avance(target_heading, distancia_mm, max_dc=100.0, min_dc=16.0, accel_mm=50.0, decel_mm=140.0, kp=3.5, kd=0.18):
+async def avance(target_heading, distancia_mm, max_dc=100.0, min_dc=30.0, accel_mm=50.0, decel_mm=140.0, kp=3.5, kd=0.18, freno=True, rampa_inicio=True):
+    # freno=False: no desacelera al final ni frena; los motores siguen girando para
+    #   encadenar con el siguiente movimiento (otro avance, seguir línea...) sin detenerse.
+    # rampa_inicio=False: arranca directo en max_dc (útil si viene de un movimiento sin freno).
     left_motor.reset_angle(0)
     right_motor.reset_angle(0)
 
@@ -58,15 +61,15 @@ async def avance(target_heading, distancia_mm, max_dc=100.0, min_dc=16.0, accel_
         
         dist_restante = max(0.0, abs(distancia_mm) - abs(recorrido))
 
-        if abs(recorrido) < accel_mm:
+        if rampa_inicio and abs(recorrido) < accel_mm:
             proporcion = abs(recorrido) / accel_mm
             dc_base = min_dc + (max_dc - min_dc) * proporcion
-        elif dist_restante < decel_mm:
+        elif freno and dist_restante < decel_mm:
             proporcion = dist_restante / decel_mm
             dc_base = min_dc + (max_dc - min_dc) * proporcion
         else:
-            dc_base = max_dc  
-            
+            dc_base = max_dc
+
         signo_movimiento = 1 if distancia_mm > 0 else -1
         dc_base *= signo_movimiento
 
@@ -90,9 +93,11 @@ async def avance(target_heading, distancia_mm, max_dc=100.0, min_dc=16.0, accel_
         error_previo = error_ang
         await wait(20)
 
-    left_motor.hold()
-    right_motor.hold()
-    await wait(80) 
+    if freno:
+        left_motor.hold()
+        right_motor.hold()
+        await wait(80)
+    # Sin freno: los motores quedan con la última potencia hasta la siguiente orden
 
 
 async def retrocede(target_heading, distancia_mm, max_dc=100.0, min_dc=30.0, accel_mm=50.0, decel_mm=140.0, kp=3.5, kd=0.18):  # Calibrar min_dc: potencia mínima (arranque y final); muy baja = le cuesta arrancar
@@ -220,24 +225,41 @@ async def retrocede_hasta_pared(target_heading, dc=60.0, distancia_max=500.0, ig
     return choco
 
 
-async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, tolerancia=1, tiempo_estabilizacion=80):
-    error_previo = 0.0
+async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, tolerancia=1, tiempo_estabilizacion=80, tiempo_max=3000):
+    # tiempo_max: seguridad (ms); si no llega al objetivo en ese tiempo, termina igual para no quedarse pegado.
+    # Arranca la derivada con el error real para evitar el golpe del primer ciclo
+    error_previo = ((target_heading - hub.imu.heading() + 180) % 360) - 180
     derivada_filtrada = 0.0
-    ALFA_FILTRO = 0.35 
+    ALFA_FILTRO = 0.35
 
     cronometro_lazo = StopWatch()
     cronometro_estabilizacion = StopWatch()
+    cronometro_total = StopWatch()
     cronometro_lazo.reset()
     cronometro_estabilizacion.reset()
-    
+
     estabilizando = False
 
+    # Anti-estancamiento: si el robot no gira (le falta poco y min_dc no alcanza), suma potencia extra
+    empuje_extra = 0.0
+    heading_previo = hub.imu.heading()
+
     while True:
+        if cronometro_total.time() >= tiempo_max:
+            print("giro: tiempo máximo, objetivo", target_heading, "actual", hub.imu.heading())
+            break
+
         dt = cronometro_lazo.time() / 1000.0
         cronometro_lazo.reset()
-        if dt <= 0: dt = 0.001
+        if dt <= 0.005: dt = 0.01
 
         heading_actual = hub.imu.heading()
+
+        if abs(heading_actual - heading_previo) < 0.2:
+            empuje_extra = min(empuje_extra + 1.0, 25.0)
+        else:
+            empuje_extra = max(empuje_extra - 2.0, 0.0)
+        heading_previo = heading_actual
         error_ang = target_heading - heading_actual
         error_ang = (error_ang + 180) % 360 - 180 
         
@@ -272,13 +294,66 @@ async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, toler
             salida_pd = termino_p + termino_d
             salida_aplicada = max(min(salida_pd, limite_dc), -limite_dc)
             
-            if abs(salida_aplicada) < min_dc:
-                salida_aplicada = min_dc if error_ang > 0 else -min_dc
+            minimo = min_dc + empuje_extra   # mínimo + extra si está estancado
+            if abs(salida_aplicada) < minimo:
+                salida_aplicada = minimo if error_ang > 0 else -minimo
 
             left_motor.dc(salida_aplicada)
             right_motor.dc(-salida_aplicada)
 
         error_previo = error_ang
+        await wait(10)
+
+    left_motor.hold()
+    right_motor.hold()
+    await wait(60)
+
+
+async def giro_arco(target_heading, radio_mm, velocidad_mm_s=250.0, adelante=True, vel_minima_mm_s=60.0, zona_frenado=20.0, tolerancia=1.0, tiempo_max=4000):
+    """Gira siguiendo un arco de radio `radio_mm` (medido al CENTRO del robot)
+    hasta que el heading llegue a `target_heading`.
+
+    - El sentido del giro (derecha/izquierda) sale solo: el camino más corto al objetivo.
+    - adelante=False hace el arco en reversa.
+    - Usa control de velocidad de los motores (run), así cada rueda mantiene su
+      velocidad aunque cambie la batería y el arco sale con el radio correcto.
+    - Al acercarse al objetivo (zona_frenado grados) baja la velocidad para no pasarse.
+    - radio_mm menor que la mitad del eje (76 mm) hace que la rueda interior vaya hacia atrás.
+    """
+    EJE_MM = 152.0                       # Distancia entre ruedas (Robot_specs: DISTANCIA_EJES)
+    MM_S_A_GRADOS_S = 360.0 / (63.0 * 3.141)   # mm/s -> grados/s de la rueda (rueda de 63 mm)
+
+    error_ang = ((target_heading - hub.imu.heading() + 180) % 360) - 180
+    if abs(error_ang) <= tolerancia:
+        return
+    signo_giro = 1 if error_ang > 0 else -1   # 1 = horario (derecha), -1 = antihorario (izquierda)
+    sentido = 1 if adelante else -1
+    radio_mm = max(abs(radio_mm), 1.0)
+
+    cronometro_total = StopWatch()
+
+    while True:
+        if cronometro_total.time() >= tiempo_max:
+            print("giro_arco: tiempo máximo, objetivo", target_heading, "actual", hub.imu.heading())
+            break
+
+        error_ang = ((target_heading - hub.imu.heading() + 180) % 360) - 180
+        # Llegó, o se pasó (el error cambió de signo respecto al inicio)
+        if abs(error_ang) <= tolerancia or error_ang * signo_giro < 0:
+            break
+
+        # Velocidad: completa y baja en los últimos grados
+        proporcion = min(abs(error_ang) / zona_frenado, 1.0)
+        v = vel_minima_mm_s + (velocidad_mm_s - vel_minima_mm_s) * proporcion
+
+        # Rueda exterior e interior según el radio: v_rueda = v_centro ± w * EJE/2, con w = v/R
+        v_centro = v * sentido
+        v_giro = signo_giro * v * (EJE_MM / 2.0) / radio_mm
+        v_izq = v_centro + v_giro
+        v_der = v_centro - v_giro
+
+        left_motor.run(v_izq * MM_S_A_GRADOS_S)
+        right_motor.run(v_der * MM_S_A_GRADOS_S)
         await wait(10)
 
     left_motor.hold()

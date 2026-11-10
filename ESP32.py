@@ -16,23 +16,58 @@ PINES_PROHIBIDOS = (21, 22)   # los usa la HuskyLens (I2C)
 # =====================================
 # SERVO
 # =====================================
+# Velocidad de cada servo en grados por segundo. Pin que no esté aquí = salto directo.
+VELOCIDAD = {20: 450}   # Calibrar: más bajo = más lento y suave (el servo da máx ~430 °/s a 4.8 V)
+PASO_MS = 10            # cada cuánto avanza la rampa
+
 class ServomotorPosicional:
     def __init__(self, pin_num, freq=50):
         self.pwm = PWM(Pin(pin_num), freq=freq)
         self.pulso_min_us = 500
         self.pulso_max_us = 2500
         self.rango_angular = 270.0
+        self.vel = VELOCIDAD.get(pin_num, 0)
+        self.actual = None      # None = posición desconocida (recién creado o eje suelto)
+        self.objetivo = None
         self.pwm.duty_u16(0)
 
-    def mover_a_posicion(self, grados):
-        g = max(0, min(self.rango_angular, grados))
+    def _aplicar(self, g):
         pulso_us = self.pulso_min_us + (g / self.rango_angular) * (self.pulso_max_us - self.pulso_min_us)
         self.pwm.duty_u16(int((pulso_us / 20000.0) * 65535))
 
+    def mover_a_posicion(self, grados):
+        g = max(0, min(self.rango_angular, grados))
+        self.objetivo = g
+        # Sin posición conocida o sin rampa: salta directo. Si no, paso() lo lleva poco a poco.
+        if self.actual is None or self.vel <= 0:
+            self.actual = g
+            self._aplicar(g)
+
+    def paso(self):
+        """Avanza la rampa un poco hacia el objetivo (lo llama mover_servos)."""
+        if self.actual is None or self.objetivo is None or self.actual == self.objetivo:
+            return
+        d = self.vel * PASO_MS / 1000
+        if abs(self.objetivo - self.actual) <= d:
+            self.actual = self.objetivo
+        elif self.objetivo > self.actual:
+            self.actual += d
+        else:
+            self.actual -= d
+        self._aplicar(self.actual)
+
     def liberar_eje(self):
         self.pwm.duty_u16(0)
+        self.actual = None
+        self.objetivo = None
 
 servos = {}   # pin -> servo
+
+async def mover_servos():
+    while True:
+        for m in servos.values():
+            m.paso()
+        await asyncio.sleep_ms(PASO_MS)
 
 # =====================================
 # HUSKYLENS
@@ -139,6 +174,7 @@ pr.add_command("robot", to_hub_fmt="<14Bh", from_hub_fmt="hh")   # debe ser IGUA
 async def main():
     asyncio.create_task(pr.process_async())
     asyncio.create_task(leer_husky())
+    asyncio.create_task(mover_servos())
     while True:
         print("Conectado:", pr.connected())
         print("Fila 1:", grid[0:4])
