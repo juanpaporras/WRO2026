@@ -1,7 +1,7 @@
 from pybricks.tools import wait, run_task, multitask
 
 # Importación de módulos propios organizados
-from GyroMovement import hub, left_motor, right_motor, avance, retrocede, retrocede_hasta_pared, giro, giro_pivot
+from GyroMovement import hub, left_motor, right_motor, avance, retrocede, retrocede_hasta_pared, giro, giro_pivot, giro_arco
 from Line_sensors import sensor_mbc, diagnostico_espectral_mbc,seguir_linea_distancia, seguir_linea_hasta_interseccion, avance_hasta_linea, avance_contando_lineas, retrocede_hasta_linea
 from Actuators import (
     motorElevador, motorcuadro, 
@@ -12,6 +12,11 @@ from Actuators import (
 )
 from Extras import boton, advertencia_bateria, medir_trayectos_manual
 from Funciones_ESP32 import iniciar_esp32, proceso_esp32, leer_camara, servo
+from Robot_specs import get_robot
+robot = get_robot()
+hub = robot.hub
+left_motor = robot.left_motor
+right_motor = robot.right_motor
 
 heading_temporal = 0
 bloques_azules = 6
@@ -247,7 +252,7 @@ async def agarrar_rojo():
     posicion_actual = 4 #El robot está en la posición 4 y lado izquierdo
     lado_posicion_actual = 0 #El robot está en la posición 4 y lado izquierdo
 
-async def resolver_lecturas():
+async def   resolver_lecturas():
     global i, llevadas
     contador = 0
     for i in range(len(lectura)): #Recorre la lista de lecturas
@@ -329,9 +334,14 @@ async def dejar_bloques_2():
 # ---------------------------------------------------------
 # RUTAS DE COMPETICIÓN 
 # ---------------------------------------------------------
-async def Ruta_1_Lectura(): #Se acomoda de la salida y sigue linea hasta interseccion para llegar a leer, la distancia de montaje debe ser para que quede en el centro de la linea, gire se tire hacia atras y choque con el mosaico. Ahi ya hace la lectura
-    await avance(0, 100, 80)
-    await giro(90)
+async def Ruta_1_Lectura(): # --> RUTA EN LISTA #Se acomoda de la salida y sigue linea hasta interseccion para llegar a leer, la distancia de montaje debe ser para que quede en el centro de la linea, gire se tire hacia atras y choque con el mosaico. Ahi ya hace la lectura
+    #await avance(0, 100, 80)
+    #await giro(90)
+
+    #await avance(0, 15, 80, freno=False)
+    #await giro_pivot(90, pivote_izquierdo=False)
+
+    await giro_arco(90, 90, freno=False)
     await avance(90, 200, 80,freno=False)
     await seguir_linea_distancia(distancia_mm=500, vel_crucero_mm_s=700)
     await seguir_linea_hasta_interseccion("centro", target_heading=90, vel_crucero_mm_s=400, montarse=True, distancia_montaje=41)
@@ -342,41 +352,43 @@ async def Ruta_1_Lectura(): #Se acomoda de la salida y sigue linea hasta interse
     await retrocede_hasta_pared(180, distancia_max=1000, dc=50)
     hub.imu.reset_heading(180)
 
-async def Ruta_2_Recoger_y_llevar_cemento():      
+async def Ruta_2_Recoger_y_llevar_cemento():      # --> RUTA EN LISTA
     await avance(180, 150, 80)
     await seguir_linea_distancia(distancia_mm=75, vel_crucero_mm_s=300)
     await giro(1)
     await bajar_cuadro()
     await giro(90)
-    await seguir_linea_distancia(distancia_mm=500, vel_crucero_mm_s=500)
-    await giro_pivot(0, pivote_izquierdo=True)
+    await seguir_linea_distancia(distancia_mm=550, vel_crucero_mm_s=500, freno=False)
+    await giro_pivot(0, pivote_izquierdo=True, freno=False)
     await giro_pivot(90, pivote_izquierdo=False)
-    await subir_cuadro()
+    await multitask(subir_cuadro(), retrocede(90, 40))
     await seguir_linea_distancia(distancia_mm=50, vel_crucero_mm_s=300)
 
-async def Ruta_3_recoger_ladrillos_azules():  # --> RUTA EN PROCESO
-    await giro(-89)
+async def Ruta_3_recoger_ladrillos_azules():  # --> RUTA EN LISTA
+    await giro(-90)
     await abrir_paletas() 
-    await boton()
-    await retrocede(-90, 180)
-    await boton()
+    await retrocede(-89, 180)
     await cerrar_paletas()
+    await retrocede_hasta_pared(-89, 40)
+    hub.imu.reset_heading(-90)
+    await avance(-90, 140)
     await seguir_linea_hasta_interseccion("centro", target_heading=-90, vel_crucero_mm_s=400, montarse=False)
-    await giro(0)
-    await retrocede_hasta_pared(0, dc= 70)
+    await giro(3)
+    await retrocede(0, 250, freno= False)
+    await retrocede_hasta_pared(0, 30)
     hub.imu.reset_heading(0)
-    await avance(0, 170)
-    await giro(90)
+    await avance(0, 110) 
+    await giro_pivot(90)
     await retrocede(90, 200)
-    await bajar_cuadro()
-    await retrocede(90, 1250)
+    await multitask(bajar_cuadro(), retrocede(90, 680, max_dc= 70))
     await avance(90, 100)
-    await giro(135)
-    await retrocede(135, 80)
+    await giro(120)
+    await retrocede(120, 280)
     await giro(90)
-    await retrocede_hasta_pared(90, 60)
+    await retrocede(90, 400, freno= False)
+    await retrocede_hasta_pared(90, 30)
     hub.imu.reset_heading(90)
-    await avance(90, 400)
+    await avance(90, 150)
     await giro_pivot(45, pivote_izquierdo= False)
     await subir_cuadro()
     await giro_pivot(90, pivote_izquierdo= False)
@@ -384,6 +396,40 @@ async def Ruta_3_recoger_ladrillos_azules():  # --> RUTA EN PROCESO
     await retrocede_hasta_pared(0, 60)
     await avance_hasta_linea(0)
     hub.imu.reset_heading(0)
+
+async def Ruta_ladrillos_verdes():
+    await retrocede(-90, 150, freno=False)
+    await giro_arco(180, 300, freno=False, adelante=False, velocidad_mm_s=500)
+    await retrocede_hasta_pared(180, 50)
+    hub.imu.reset_heading(180)
+    await avance_hasta_linea(180, esperar_blanco=False, montarse=True, distancia_montaje=35, max_dc=60)
+    await giro(-90)
+    await abrir_paletas()
+    await retrocede(-90, 205)
+    await cerrar_paletas()
+    await retrocede_hasta_pared(-90)
+    hub.imu.reset_heading(-90)
+    await avance(-90, 40)
+    await giro(0)
+    await retrocede(0, 110, 80)
+    await bajar_cuadro()
+    await retrocede(0, 110)
+    await giro(90)
+    await retrocede(91, 600)
+    await retrocede_hasta_pared(90, 30)
+    hub.imu.reset_heading(90)
+    await avance(91, 35, 55)
+    await subir_cuadro()
+    await retrocede(90, 25)
+    await avance(90, 150, freno=False)
+    await giro_arco(-90, 200, lado="derecha", velocidad_mm_s=500)
+    await seguir_linea_distancia(150, 300)
+    await seguir_linea_distancia(200)
+    await seguir_linea_hasta_interseccion("centro", 300, montarse=True, distancia_montaje=35)
+    await giro(180)
+    await retrocede(180, 190)
+
+
 
 #async def Ruta_3__Comerce_Azules():
 # ---------------------------------------------------------
@@ -414,12 +460,19 @@ async def Run():
         await hub.speaker.beep(1000, 50) 
     await hub.speaker.beep(1000, 50)
     await advertencia_bateria(await boton())
-    hub.imu.reset_heading(0) 
+    hub.imu.reset_heading(-90) 
+    while True:
+        await motor_dc_por_segundos (right_motor,2000,100)
+        await boton ()
+        await motor_dc_por_segundos (right_motor,2000,-100)
+        await boton ()
 
-    """await Ruta_1_Lectura()
-    await Ruta_2_Recoger_y_llevar_cemento()
-    await Ruta_3_recoger_ladrillos_azules()"""
-    await medir_trayectos_manual()  # Mide los trayectos y los guarda en la memoria del hub
+
+    #await Ruta_ladrillos_verdes()
+    #await Ruta_1_Lectura()
+    #await Ruta_2_Recoger_y_llevar_cemento()
+    #await Ruta_3_recoger_ladrillos_azules()
+    #await medir_trayectos_manual()  # Mide los trayectos y los guarda en la memoria del hub
     #await Ruta_prueba_logica()
 
 

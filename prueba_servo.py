@@ -34,7 +34,7 @@ T_PASO = 2          # segundos entre pasos (para revisar si ya aprieta)
 pwm = None
 
 def duty(g):
-    pulso = 500 + g / 270 * 2000          # 500-2500 us = 0-270 grados
+    pulso = 500 + g / 270 * 2000          # 500-2500 us = s0-270 grados
     return int(pulso / 20000 * 65535)
 
 def ir(g):

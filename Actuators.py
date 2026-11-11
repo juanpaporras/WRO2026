@@ -69,7 +69,7 @@ async def abrir_paletas():
 
 async def abrir_garra():
     await servo(20, 150)  # abrir garra
-
+ 
 # La garra abierta empuja contra su tope (a propósito, para tensar las ligas).
 # Si se le pide un ángulo MUY pasado del tope, el servo queda trabado a toda fuerza,
 # se calienta y su protección interna lo bloquea: al cerrar solo zumba.
