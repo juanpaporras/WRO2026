@@ -1,7 +1,7 @@
 from pybricks.tools import wait, run_task, multitask
 
 # Importación de módulos propios organizados
-from GyroMovement import hub, left_motor, right_motor, avance, retrocede, retrocede_hasta_pared, giro, giro_pivot, giro_arco
+from GyroMovement import hub, left_motor, right_motor, avance, retrocede, retrocede_hasta_pared, avance_hasta_pared, giro, giro_pivot, giro_arco
 from Line_sensors import sensor_mbc, diagnostico_espectral_mbc,seguir_linea_distancia, seguir_linea_hasta_interseccion, avance_hasta_linea, avance_contando_lineas, retrocede_hasta_linea
 from Actuators import (
     motorElevador, motorcuadro, 
@@ -429,6 +429,28 @@ async def Ruta_ladrillos_verdes():
     await giro(180)
     await retrocede(180, 190)
 
+async def Ruta_blancos():
+    await avance(180, 300, freno=False)
+    await avance_hasta_linea(180)
+    await giro(90)
+    await seguir_linea_distancia(1200, freno=False)
+
+
+    await seguir_linea_hasta_interseccion("centro", vel_crucero_mm_s=450)
+    await giro_pivot(145, pivote_izquierdo=False)
+    await giro_pivot(90, pivote_izquierdo=True)
+    await giro(-90)
+    await abrir_paletas()
+    await retrocede(-90, 200)
+    await cerrar_paletas()
+    await retrocede_hasta_pared(-90)
+    await avance_hasta_linea(-91)
+    await giro(-45)
+    await avance(-45, 600)
+    await avance_hasta_linea(-45, montarse=True, distancia_montaje=25)
+    await giro(-90)
+    await seguir_linea_hasta_interseccion("centro", montarse=True, distancia_montaje=25)
+    await avance_hasta_pared(-90, 50)
 
 
 #async def Ruta_3__Comerce_Azules():
@@ -460,14 +482,11 @@ async def Run():
         await hub.speaker.beep(1000, 50) 
     await hub.speaker.beep(1000, 50)
     await advertencia_bateria(await boton())
-    hub.imu.reset_heading(-90) 
-    while True:
-        await motor_dc_por_segundos (right_motor,2000,100)
-        await boton ()
-        await motor_dc_por_segundos (right_motor,2000,-100)
-        await boton ()
+    hub.imu.reset_heading(180) 
 
 
+
+    await Ruta_blancos()
     #await Ruta_ladrillos_verdes()
     #await Ruta_1_Lectura()
     #await Ruta_2_Recoger_y_llevar_cemento()
@@ -475,6 +494,12 @@ async def Run():
     #await medir_trayectos_manual()  # Mide los trayectos y los guarda en la memoria del hub
     #await Ruta_prueba_logica()
 
+"""
+    while True:
+        await motor_dc_por_segundos (right_motor,2000,100)
+        await boton ()
+        await motor_dc_por_segundos (right_motor,2000,-100)
+        await boton ()"""
 
 iniciar_esp32()   # debe ir ANTES de run_task
 # race=True: el programa termina cuando Run() termina (proceso_esp32 corre para siempre)

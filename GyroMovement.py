@@ -230,6 +230,66 @@ async def retrocede_hasta_pared(target_heading, dc=60.0, distancia_max=1000.0, i
     return choco
 
 
+async def avance_hasta_pared(target_heading, dc=60.0, distancia_max=1000.0, ignorar_mm=20.0, velocidad_stall=70.0, tiempo_stall=150, kp=2.0, nuevo_heading=None):
+    """Avanza hasta chocar con una pared y frena (stall stop). Igual que retrocede_hasta_pared
+    pero hacia adelante.
+
+    - dc: potencia del avance (Calibrar: suficiente para moverse, no tanta que rebote).
+    - distancia_max: seguridad; si no choca en esta distancia (mm), frena igual.
+    - ignorar_mm: no detecta choque en los primeros mm (al arrancar la velocidad es baja).
+    - velocidad_stall: si las ruedas van más lento que esto (grados/s) se considera choque.
+    - tiempo_stall: cuánto tiempo (ms) tienen que estar frenadas para confirmar el choque.
+    - nuevo_heading: si se da, reinicia el giroscopio a ese valor al chocar
+      (la pared deja el robot recto, sirve para corregir el error acumulado).
+    Devuelve True si chocó con la pared, False si llegó a distancia_max sin chocar.
+    """
+    left_motor.reset_angle(0)
+    right_motor.reset_angle(0)
+
+    DIAMETRO_RUEDA = 63.0
+    FACTOR_CONVERSION = (DIAMETRO_RUEDA * 3.141) / 360.0
+
+    cronometro_stall = StopWatch()
+    frenado = False
+    choco = False
+
+    while True:
+        recorrido = ((abs(left_motor.angle()) + abs(right_motor.angle())) / 2.0) * FACTOR_CONVERSION
+        if recorrido >= distancia_max:
+            break
+
+        # --- Detección de choque: las ruedas casi no giran aunque se les da potencia ---
+        velocidad = (abs(left_motor.speed()) + abs(right_motor.speed())) / 2.0
+        if recorrido > ignorar_mm and velocidad < velocidad_stall:
+            if not frenado:
+                frenado = True
+                cronometro_stall.reset()
+            elif cronometro_stall.time() >= tiempo_stall:
+                choco = True
+                break
+        else:
+            frenado = False
+
+        # --- Corrección de rumbo (mismo signo que avance). kp bajo para que,
+        # al tocar la pared, el robot pueda enderezarse contra ella sin pelear con el gyro ---
+        error_ang = ((target_heading - hub.imu.heading() + 180) % 360) - 180
+        correccion = kp * error_ang
+        if frenado:
+            correccion = 0.0   # tocando la pared: deja que la pared lo enderece
+
+        left_motor.dc(max(min(dc + correccion, 100.0), -100.0))
+        right_motor.dc(max(min(dc - correccion, 100.0), -100.0))
+        await wait(10)
+
+    left_motor.hold()
+    right_motor.hold()
+    await wait(80)
+
+    if choco and nuevo_heading is not None:
+        hub.imu.reset_heading(nuevo_heading)
+    return choco
+
+
 async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, tolerancia=1, tiempo_estabilizacion=80, tiempo_max=3000):
     # tiempo_max: seguridad (ms); si no llega al objetivo en ese tiempo, termina igual para no quedarse pegado.
     # Arranca la derivada con el error real para evitar el golpe del primer ciclo
