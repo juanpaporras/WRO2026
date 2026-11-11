@@ -90,14 +90,40 @@ async def getBlackLineWidth():
 # FUNCIONES DE SEGUIMIENTO ÓPTICO Y LÍNEAS
 # =============================================================================
 
-async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=700, accel_dist_mm=50, decel_dist_mm=100, vel_minima_mm_s=80, kp=3, kd=2.1, ki=0.0, freno=True):
+# Siguiendo un borde ("izquierda"/"derecha"), si el robot se mete sobre la línea el kp se
+# multiplica por este factor para que salga rápido y se estabilice en el borde.
+# Del lado de afuera usa el kp normal (ahí el error casi no crece y no hace falta más).
+FACTOR_ADENTRO = 2.0   # Calibrar: más alto = sale más rápido de la línea; muy alto = zigzag en el borde
+
+def _esta_adentro(lado, error):
+    """True si, siguiendo un borde, el robot quedó encima de la línea (lado de adentro).
+    error > 0 corrige a la izquierda, error < 0 corrige a la derecha."""
+    if lado == "derecha":
+        return error < 0   # la línea se movió hacia el centro/derecha del sensor
+    if lado == "izquierda":
+        return error > 0   # la línea se movió hacia el centro/izquierda del sensor
+    return False
+
+async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=700, accel_dist_mm=50, decel_dist_mm=100, vel_minima_mm_s=80, kp=3, kd=2.1, ki=0.0, freno=True, lado="centro", vel_referencia=700, factor_adentro=FACTOR_ADENTRO):
+    # lado: "centro" sigue el centro de la línea; "izquierda"/"derecha" siguen ese borde
+    # (mismo offset que seguir_linea_hasta_interseccion).
+    # kp es el valor calibrado a vel_referencia (mm/s). En cada ciclo se escala con la
+    # velocidad actual (kp * vel / vel_referencia) para que corrija igual por milímetro a
+    # cualquier velocidad. kd NO se escala: su efecto por milímetro ya no depende de la velocidad.
     start_dist = robot.drive_base.distance()
     last_error = 0.0
     derivada_filtrada = 0.0
-    alfa_filtro = 0.35 
-    MAX_TURN_RATE = 60.0 
+    alfa_filtro = 0.35
+    MAX_TURN_RATE = 60.0
     dt_fijo = 0.010
-    
+
+    if lado == "izquierda":
+        setpoint = -7.0
+    elif lado == "derecha":
+        setpoint = 7.0
+    else:
+        setpoint = 0.0
+
     while True:
         dist_actual = robot.drive_base.distance() - start_dist
         if dist_actual >= distancia_mm:
@@ -114,8 +140,8 @@ async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=700, accel_dist_
             vel_lineal = vel_crucero_mm_s
             
         await sensor_mbc.actualizar_lectura()
-        error = sensor_mbc.error_espacial
-        
+        error = sensor_mbc.error_espacial - setpoint
+
         P = error
         derivada_cruda = (error - last_error) / dt_fijo
         derivada_filtrada = (derivada_filtrada * (1.0 - alfa_filtro)) + (derivada_cruda * alfa_filtro)
@@ -123,10 +149,13 @@ async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=700, accel_dist_
         
         if abs(error) <= 0.2:
             error = 0.0
-            
-        turn_rate = -((kp * P) + (kd * D))
+
+        kp_vel = kp * vel_lineal / vel_referencia   # kp proporcional a la velocidad actual
+        if _esta_adentro(lado, error):
+            kp_vel *= factor_adentro                # sale más rápido si se metió sobre la línea
+        turn_rate = -((kp_vel * P) + (kd * D))
         turn_rate = max(min(turn_rate, MAX_TURN_RATE), -MAX_TURN_RATE)
-        
+
         robot.drive_base.drive(vel_lineal, turn_rate)
         last_error = error
         await wait(10)
@@ -136,7 +165,12 @@ async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=700, accel_dist_
         await wait(50) 
 
 
-async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, kp=6, kd=2.8, ki=0.0, umbral_interseccion=8, centrado_estricto=False, target_heading=None, montarse=False, distancia_montaje=20):
+async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, kp=6, kd=2.8, ki=0.0, umbral_interseccion=8, centrado_estricto=False, target_heading=None, montarse=False, distancia_montaje=20, debug=False, vel_referencia=600, factor_adentro=FACTOR_ADENTRO):
+    # debug=True: imprime ancho, error del sensor y giro cada vez que el giro es brusco (>= 40 °/s)
+    # kp es el valor calibrado a vel_referencia (mm/s); se escala con vel_crucero_mm_s
+    # (kp * vel / vel_referencia) para que corrija igual por milímetro a cualquier velocidad.
+    # kd NO se escala: su efecto por milímetro ya no depende de la velocidad.
+    kp_vel = kp * vel_crucero_mm_s / vel_referencia
     last_error = 0.0
     derivada_filtrada = 0.0
     alfa_filtro = 0.35
@@ -196,8 +230,13 @@ async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, k
         derivada_filtrada = (derivada_filtrada * (1.0 - alfa_filtro)) + (derivada_cruda * alfa_filtro)
         D = derivada_filtrada
         
-        turn_rate = -((kp * P) + (kd * D))
+        kp_uso = kp_vel * factor_adentro if _esta_adentro(lado, error) else kp_vel
+        turn_rate = -((kp_uso * P) + (kd * D))
         turn_rate = max(min(turn_rate, MAX_TURN_RATE), -MAX_TURN_RATE)
+
+        if debug and abs(turn_rate) >= 40:
+            print("BRUSCO ancho", ancho_linea, "err_sensor", sensor_mbc.error_espacial,
+                  "P", kp_uso * P, "D", kd * D, "giro", turn_rate)
 
         robot.drive_base.drive(vel_crucero_mm_s, turn_rate)
         
