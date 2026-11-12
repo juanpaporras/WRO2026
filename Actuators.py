@@ -50,7 +50,7 @@ async def subir_elevador():
     await motor_dc_por_grados(motorElevador, 185, 100)
 
 async def bajar_elevador():
-    await motor_dc_por_segundos(motorElevador, 800, -30)
+    await motor_dc_por_segundos(motorElevador, 600, -50)
 
 async def bajar_cuadro():
     await servo (20,237,1000)
@@ -65,7 +65,7 @@ async def abrir_paletas():
     await servo(19, 30,600)  # abrir paletas
 
 async def abrir_garra():
-    await motor_dc_por_segundos (motorgarra,1300,-80)
+    await motor_dc_por_segundos (motorgarra,1000,-90)
     motorgarra.hold()
 
 async def cerrar_garra():
@@ -73,5 +73,5 @@ async def cerrar_garra():
     motorgarra.hold()
 
 async def cerrar_garra_poquito():
-    await motor_dc_por_grados (motorgarra,50,80)
+    await motor_dc_por_grados (motorgarra,45,80)
 

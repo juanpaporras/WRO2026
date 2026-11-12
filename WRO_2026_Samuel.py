@@ -43,13 +43,14 @@ izquierda, derecha, lado_rojo = [], [], -1
 # Sacadas del tapete WRO 2026 Senior (2362 x 1143 mm).
 # Coordenadas: 0 = hacia arriba del tapete, el robot recoge mirando a -90.
 # ---------------------------------------------------------
-SEPARACION_FILAS = 33   # Distancia entre las 2 filas de bloques de un mismo color (lado izq/der)
-PASO_COLUMNA = 45         # Distancia entre columnas de bloques (avanzar una "fila" hacia -90)
-VEL_RECOLECCION = 200     # Calibrar: velocidad (mm/s) al entrar a agarrar; más baja = se desliza menos al frenar
+SEPARACION_FILAS = 30   # Distancia entre las 2 filas de bloques de un mismo color (lado izq/der)
+PASO_COLUMNA = 32         # Distancia entre columnas de bloques (avanzar una "fila" hacia -90)
+VEL_RECOLECCION = 300     # Calibrar: velocidad (mm/s) al entrar a agarrar; más baja = se desliza menos al frenar
 EXTRA_RETROCESO = 63   # Calibrar: mm extra que retrocede MÁS de lo que avanzó, para quedar en el medio del carril y girar sin tocar los bloques
-DISTANCIA_MONTAJE = 55    # Calibrar: mm que avanza después de la línea cuando tiene que pasarse al otro lado (si es mucho, luego no encuentra la línea al seguirla)
+DISTANCIA_MONTAJE = 75    # Calibrar: mm que avanza después de la línea cuando tiene que pasarse al otro lado (si es mucho, luego no encuentra la línea al seguirla)
 MONTAJE_SIN_CAMBIO = 18   # Calibrar: mm que avanza después de la línea cuando NO tiene que pasarse de lado
-DESCARGA_BLOQUE = 49     # Retroceso de "un bloque" en la zona de descarga
+MONTAJE_DESCARGA = 5      # Calibrar: mm que se monta sobre la línea 2/3 al llegar a llevar_a_descarga
+DESCARGA_BLOQUE = 50     # Retroceso de "un bloque" en la zona de descarga
 DESCARGA_AVANCE = 90      # Del carril hasta la zona de descarga
 # Rojo: cuadro gris arriba a la derecha, pasando la calle gris vertical.
 # Desde el centro del carril (fila de abajo de los blancos) está a ~300 mm hacia 90 y ~150 mm hacia 0.
@@ -68,6 +69,10 @@ DC_BUSQUEDA = 35              # Calibrar: potencia al buscar la línea (lento pa
 DISTANCIA_MAX_BUSQUEDA = 120  # Calibrar: seguridad (mm); si no encuentra la línea real, deja de buscar
 MM_POR_GRADO = (63.0 * 3.141) / 360.0   # Rueda de 63 mm
 AVANCE_MIN_BUSQUEDA = 10      # Calibrar: grados de rueda que avanza SIEMPRE tras el giro de búsqueda antes de poder detenerse (10° ≈ 5.5 mm)
+
+# Avance a -90 hasta la intersección (reemplaza al seguidor de línea en la recolección)
+DC_RECOLECCION = 38           # Calibrar: potencia al avanzar a -90 hasta la intersección
+MIN_SENSORES_INTERSECCION = 5 # Calibrar: sensores en negro para reconocer la intersección (alto para no detenerse con la línea del color, que va paralela)
 
 async def ve_linea_real():
     """True si el sensor ve la línea Y el error la ubica del lado correcto según
@@ -127,12 +132,8 @@ async def buscar_linea_recoleccion():
 
 async def logica_de_recoleccion():
     await giro(-90)
-    await abrir_garra()
-    await buscar_linea_recoleccion()   # Si el sensor no ve la línea, la busca según el lado antes de seguirla
-    if lado_posicion_actual == 0: #Si el robot está en el lado izquierdo, avanza hasta la línea y se monta sobre ella, esta distancia es suficiente para que el robot agarre la primera fila
-        await seguir_linea_hasta_interseccion("izquierda", montarse=False, target_heading=-90, vel_crucero_mm_s=VEL_RECOLECCION)
-    else:
-        await seguir_linea_hasta_interseccion("derecha", montarse=False, target_heading=-90, vel_crucero_mm_s=VEL_RECOLECCION)  # Distancia real recorrida desde el carril
+    # En lugar de seguir la línea: avanza recto a -90 (giroscopio) hasta la intersección
+    await multitask( avance_hasta_linea(-90, distancia_ignorar=10, min_sensores_linea=MIN_SENSORES_INTERSECCION, max_dc=DC_RECOLECCION, esperar_blanco=False), abrir_garra())
     avanzar =(6 - colores[lectura[i]]) // 2 #Calcula cuantas filas de bloques hay que avanzar para llegar al bloque objetivo
     # Lado derecho (1) avanza hacia -85, lado izquierdo (0) hacia -95 (Calibrar).
     # Si no avanza columnas se queda en -90. El retroceso usa el mismo ángulo para volver al mismo punto.
@@ -143,8 +144,8 @@ async def logica_de_recoleccion():
         heading_avance = -85 if lado_posicion_actual == 1 else -95
         if avanzar >= 2:
             avances_rectos = avanzar - 1
-            await avance(-90, PASO_COLUMNA * avances_rectos, 60) #Calibrar: primer avance recto a -90
-        await avance(heading_avance, PASO_COLUMNA+10, 60) #Calibrar para que el robot avance a la siguiente fila de bloques
+            await avance(-90, PASO_COLUMNA * avances_rectos, DC_RECOLECCION) #Calibrar: primer avance recto a -90
+        await avance(heading_avance, PASO_COLUMNA+10, DC_RECOLECCION) #Calibrar para que el robot avance a la siguiente fila de bloques
     await cerrar_garra_poquito()
     #Calcula cuantas filas de bloques avanzo para retroceder lo mismo
     #Calibrar para que el robot retroceda hasta llegar a la linea
@@ -154,7 +155,9 @@ async def logica_de_recoleccion():
     await retrocede(-90, PASO_COLUMNA * avances_rectos + EXTRA_RETROCESO, max_dc=70, accel_mm=80) #Calibrar (max_dc/accel_mm: arranque más suave para que no cabecee) para que el robot retroceda hasta llegar a media linea para poder girar y avanzar hasta la línea de del siguiente color objetivo
     colores[lectura[i]] -= 1 #Resta uno a la cantidad de bloques del color objetivo
 
-async def logica_de_movimiento(objetivo, lado_posicion_objetivo):
+async def logica_de_movimiento(objetivo, lado_posicion_objetivo, distancia_montaje=None):
+    # distancia_montaje=None: usa DISTANCIA_MONTAJE / MONTAJE_SIN_CAMBIO según el lado.
+    # Si se da un valor (ej. MONTAJE_DESCARGA), se monta exactamente esa distancia.
     global heading_objetivo, lado_posicion_actual, posicion_actual
     movimiento = abs(objetivo)
     if objetivo > 0: # Si el objetivo es mayor que 0, gira a la derecha
@@ -168,29 +171,29 @@ async def logica_de_movimiento(objetivo, lado_posicion_objetivo):
         # En la última línea: se monta (pasa al otro lado) o se queda justo en ella
         montarse_final = (lado_posicion_objetivo==0 and heading_objetivo == 0) or (lado_posicion_objetivo!=0 and heading_objetivo == 180)
         # Solo se monta si tiene que pasarse al otro lado de la línea; si no, frena apenas la detecta.
+        if distancia_montaje is None:
+            distancia_montaje = DISTANCIA_MONTAJE if montarse_final else MONTAJE_SIN_CAMBIO
         await avance_contando_lineas(
             heading_objetivo, movimiento,
             distancia_ignorar=50, min_sensores_linea=2,
-            montarse=True, distancia_montaje=DISTANCIA_MONTAJE if montarse_final else MONTAJE_SIN_CAMBIO,  # Calibrar: distancia para pasar la línea y alinearse con los bloques del otro lado
+            montarse=True, distancia_montaje=distancia_montaje,  # Calibrar: distancia para pasar la línea y alinearse con los bloques del otro lado
             max_dc=80, dc_aproximacion=40  # Calibrar: velocidad crucero y velocidad al llegar a la última línea
         )
         if lado_posicion_objetivo==0:
             lado_posicion_actual = 1
         else:
             lado_posicion_actual = 0
-        posicion_actual = lectura[i]
+        posicion_actual += objetivo
     else:
         if lado_posicion_objetivo == 0 and lado_posicion_actual == 0: #Si tiene que ir a la derecha y el robot está en el lado izquierdo, gira a la derecha
             await giro(5)
             await avance(5, SEPARACION_FILAS) #Calibrar para que el robot se pase de izquierda a derecha
             lado_posicion_actual = 1
-            posicion_actual = lectura[i]
 
         elif lado_posicion_objetivo != 0 and lado_posicion_actual == 1: #Si tiene que ir a la izquierda y el robot está en el lado derecho, gira a la izquierda
             await giro(175)
             await avance(175, SEPARACION_FILAS) #Calibrar para que el robot se pase de derecha a izquierda
             lado_posicion_actual = 0
-            posicion_actual = lectura[i]
 
 async def llevar_a_descarga():
     global posicion_actual, lado_posicion_actual
@@ -203,18 +206,18 @@ async def llevar_a_descarga():
         lado_posicion_objetivo = 1 #El robot debe ir al lado derecho
         orientacion_retroceso = 0 # El robot esta a la arriba y debe retroceder hacia abajo
 
-    await logica_de_movimiento(objetivo, lado_posicion_objetivo)
+    await logica_de_movimiento(objetivo, lado_posicion_objetivo, distancia_montaje=MONTAJE_DESCARGA) # En descarga solo se monta MONTAJE_DESCARGA mm
 
     if orientacion_retroceso == 1:
         if llevadas == 2:
-            await retrocede(180, 35, 60) #Calibrar para que el robot retroceda un bloque
+            await retrocede(180, 30, 60) #Calibrar para que el robot retroceda un bloque
             print("llevadas = 2, retrocediendo 1 bloque")
         elif llevadas == 0:
             await retrocede(180, DESCARGA_BLOQUE * 2, 60) #Calibrar para que el robot retroceda dos bloques
             print("llevadas = 0, retrocediendo 2 bloques")
     else:
         if llevadas == 2:
-            await retrocede(0, 35, 60) #Calibrar para que el robot retroceda un bloque
+            await retrocede(0, 30, 60) #Calibrar para que el robot retroceda un bloque
             print("llevadas = 2, retrocediendo 1 bloque")
         elif llevadas == 1:
             await retrocede(0, DESCARGA_BLOQUE * 2, 60) #Calibrar para que el robot retroceda dos bloques
@@ -222,13 +225,16 @@ async def llevar_a_descarga():
     await giro(90, 80)
     if llevadas == 2:
         await avance_hasta_linea(90, distancia_ignorar=0, min_sensores_linea=4, max_dc=60,esperar_blanco=False) #Calibrar para que el robot avance hasta la línea de descarga
-        await seguir_linea_distancia (distancia_mm=DESCARGA_AVANCE, vel_crucero_mm_s=300) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
-    elif lado_posicion_actual == 0:
-       await avance_hasta_linea(90, distancia_ignorar=0, min_sensores_linea=4, max_dc=60, montarse=True, distancia_montaje=DESCARGA_AVANCE,esperar_blanco=False) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
+        await seguir_linea_distancia (distancia_mm=DESCARGA_AVANCE+100, vel_crucero_mm_s=150) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
+        await cerrar_garra()
+    elif llevadas == 1:
+       await multitask( abrir_garra(),  avance_hasta_linea(90, distancia_ignorar=0, min_sensores_linea=4, max_dc=60, montarse=True, distancia_montaje=DESCARGA_AVANCE-20,esperar_blanco=False))
+       await multitask (giro (88), cerrar_garra_poquito())
     else:
-        await avance_hasta_linea(90, distancia_ignorar=0, min_sensores_linea=4, max_dc=60, montarse=True, distancia_montaje=DESCARGA_AVANCE,esperar_blanco=False) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
+        await multitask (abrir_garra(), avance_hasta_linea(90, distancia_ignorar=0, min_sensores_linea=4, max_dc=60, montarse=True, distancia_montaje=DESCARGA_AVANCE,esperar_blanco=False)) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
+        await multitask (giro (92),cerrar_garra_poquito())
     if llevadas != 2:
-        await abrir_garra()
+        await multitask (giro(90,40),abrir_garra())
         await retrocede(90, DESCARGA_AVANCE-5) #Calibrar para que el robot retroceda hasta pasarse de la linea y para girar hacia arriva
         await giro (-176)
         await retrocede_hasta_pared(-176, distancia_max = 1000) #Calibrar para que el robot retroceda hasta pasarse de la linea y para girar hacia arriva
@@ -241,9 +247,9 @@ async def agarrar_rojo():
     global posicion_actual, lado_posicion_actual
     objetivo = 4 - posicion_actual
     lado_posicion_objetivo = 3 #Va a la posicion 4 y lado izquierdo porque 3 != 0
-    await logica_de_movimiento(objetivo, lado_posicion_objetivo) 
+    await logica_de_movimiento(objetivo, lado_posicion_objetivo)
     await giro(90)
-    await seguir_linea_hasta_interseccion("derecha", target_heading=90, vel_crucero_mm_s=300,montarse=False) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
+    await seguir_linea_hasta_interseccion("derecha", target_heading=90, vel_crucero_mm_s=300,montarse=False,factor_adentro=3) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
     await giro_pivot(57, pivote_izquierdo=True)
     await abrir_garra()
     await avance(57, ROJO_AVANCE_50, max_dc=70) #Calibrar para que el robot avance hasta agarrar el rojo
@@ -460,13 +466,12 @@ async def Ruta_blancos():
 # Posición inicial: línea de abajo, lado izquierdo (abajo), mirando a 0.
 # ---------------------------------------------------------
 async def Ruta_prueba_logica():
-    await bajar_elevador ()
     global lectura, posicion_actual, lado_posicion_actual, llevadas, colores
     hub.imu.reset_heading(0)
 
     # 1 = Amarillo, 2 = Azul, 3 = Verde, 4 = Blanco, 5 = Rojo
     # Recorrido esperado: amarillo -> azul -> descarga -> rojo -> verde
-    lectura = [1, 2, 4, 5, 4, 4 ]   # Lectura ficticia, cambiarla para probar otros casos
+    lectura = [1, 2, 4, 1, 4, 4 ]   # Lectura ficticia, cambiarla para probar otros casos
 
     colores = {1: 6, 2: 6, 3: 6, 4: 6}   # Reinicia la cantidad de bloques por color
     posicion_actual = 0                  # 0 = línea de abajo (inicio)
@@ -491,9 +496,7 @@ async def Run():
         await hub.speaker.beep(1000, 50) 
     await hub.speaker.beep(1000, 50)
     hub.imu.reset_heading(0) 
-    await seguir_linea_hasta_interseccion("derecha",100)
-    await boton ()
-    #await multitask (subir_elevador_todo (),subir_cuadro())
+    await advertencia_bateria(boton())
     await Ruta_prueba_logica ()
     #await Ruta_blancos()
     #await Ruta_ladrillos_verdes()
@@ -511,7 +514,7 @@ async def Run():
         await motor_dc_por_segundos (right_motor,2000,-100)
         await boton ()"""
 
-#iniciar_esp32()   # debe ir ANTES de run_task
-# race=True: el programa termina cuando Run() termina (proceso_esp32 corre para siempre)
-run_task (Run())
-#Wrun_task(multitask(Run(), proceso_esp32(), race=True))
+iniciar_esp32()   # debe ir ANTES de run_task
+#race=True: el programa termina cuando Run() termina (proceso_esp32 corre para siempre)
+#run_task (Run())
+run_task(multitask(Run(), proceso_esp32(), race=False))

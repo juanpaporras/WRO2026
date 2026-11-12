@@ -8,6 +8,10 @@ from Extras import boton
 UMBRAL_NEGRO = 5    # Calibrar: lectura <= este valor se considera negro
 UMBRAL_BLANCO = 60  # Calibrar: lectura >= este valor se considera blanco
 
+# Desaceleración en los montajes (avanzar después de detectar la línea)
+MONTAJE_DC_FINAL = 25     # Calibrar: potencia con la que TERMINA el montaje de avance/retrocede_hasta_linea (más baja = frena más suave; muy baja = no llega)
+MONTAJE_VEL_FINAL = 80    # Calibrar: velocidad (mm/s) con la que TERMINA el montaje de seguir_linea_hasta_interseccion
+
 # =============================================================================
 # CONFIGURACIÓN DEL SENSOR MBC
 # =============================================================================
@@ -199,12 +203,19 @@ async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, k
                 right_motor.hold()
                 break
             else:
-                robot.drive_base.drive(vel_crucero_mm_s, 0)
+                # Montaje con desaceleración: baja de vel_crucero a MONTAJE_VEL_FINAL a lo largo del montaje
                 distancia_referencia = robot.drive_base.distance()
-                
-                while abs(robot.drive_base.distance() - distancia_referencia) < distancia_montaje:
-                    await wait(1)
-                
+                vel_final = min(MONTAJE_VEL_FINAL, vel_crucero_mm_s)
+
+                while True:
+                    recorrido_montaje = abs(robot.drive_base.distance() - distancia_referencia)
+                    if recorrido_montaje >= distancia_montaje:
+                        break
+                    proporcion = recorrido_montaje / distancia_montaje if distancia_montaje > 0 else 1.0
+                    vel = vel_crucero_mm_s + (vel_final - vel_crucero_mm_s) * proporcion
+                    robot.drive_base.drive(vel, 0)
+                    await wait(5)
+
                 robot.drive_base.stop()
                 
                 if target_heading is not None:
@@ -267,10 +278,11 @@ async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, k
             robot.drive_base.stop()
 
 
-async def _montaje_pid(target_heading, distancia_mm, dc, kp, kd, sentido=1):
+async def _montaje_pid(target_heading, distancia_mm, dc, kp, kd, sentido=1, dc_final=None):
     """Avanza (sentido=1) o retrocede (sentido=-1) distancia_mm corrigiendo el rumbo
     con el giroscopio (PD), igual que el resto del movimiento. Se usa para montarse
-    sobre la línea después de detectarla."""
+    sobre la línea después de detectarla.
+    Desacelera de forma lineal: empieza en 'dc' y termina en 'dc_final' (MONTAJE_DC_FINAL)."""
     left_motor.reset_angle(0)
     right_motor.reset_angle(0)
     FACTOR_CONVERSION = (63.0 * 3.141) / 360.0
@@ -280,12 +292,19 @@ async def _montaje_pid(target_heading, distancia_mm, dc, kp, kd, sentido=1):
     derivada_filtrada = 0.0
     cronometro_lazo = StopWatch()
     cronometro_lazo.reset()
-    dc_base = abs(dc) * sentido
+    dc_inicial = abs(dc)
+    if dc_final is None:
+        dc_final = MONTAJE_DC_FINAL
+    dc_final = min(abs(dc_final), dc_inicial)   # nunca acelera durante el montaje
 
     while True:
         recorrido = ((abs(left_motor.angle()) + abs(right_motor.angle())) / 2.0) * FACTOR_CONVERSION
         if recorrido >= distancia_mm:
             break
+
+        # Desaceleración: baja la potencia de dc_inicial a dc_final a lo largo del montaje
+        proporcion = recorrido / distancia_mm if distancia_mm > 0 else 1.0
+        dc_base = (dc_inicial + (dc_final - dc_inicial) * proporcion) * sentido
 
         dt = cronometro_lazo.time() / 1000.0
         cronometro_lazo.reset()
