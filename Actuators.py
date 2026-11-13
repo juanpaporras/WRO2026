@@ -1,7 +1,7 @@
 from Extras import boton
 from pybricks.pupdevices import Motor
 from pybricks.parameters import Port
-from pybricks.tools import wait, StopWatch
+from pybricks.tools import wait, run_task, multitask, StopWatch
 from Funciones_ESP32 import servo, mover_servo
 # =============================================================================
 # INICIALIZACIÓN DE MOTORES DE ACCESORIOS
@@ -24,13 +24,16 @@ def configurar_actuador(motor):
 # =============================================================================
 
 async def motor_dc_por_grados(motor, grados, potencia):
-    angulo_objetivo = motor.angle() + grados
-    if grados > 0:
-        motor.dc(abs(potencia))
+    # El SENTIDO lo da el signo de la potencia; los grados son siempre la cantidad a girar (se usa abs).
+    grados = abs(grados)
+    if potencia > 0:
+        angulo_objetivo = motor.angle() + grados
+        motor.dc(potencia)
         while motor.angle() < angulo_objetivo:
             await wait(10)
-    elif grados < 0:
-        motor.dc(-abs(potencia))
+    elif potencia < 0:
+        angulo_objetivo = motor.angle() - grados
+        motor.dc(potencia)
         while motor.angle() > angulo_objetivo:
             await wait(10)
     motor.hold()
@@ -47,31 +50,38 @@ async def subir_elevador_todo():
     await motor_dc_por_segundos(motorElevador, 700, 90)
 
 async def subir_elevador():
-    await motor_dc_por_grados(motorElevador, 185, 100)
+    await motor_dc_por_grados(motorElevador, 170, 100)
 
 async def bajar_elevador():
-    await motor_dc_por_segundos(motorElevador, 600, -50)
+    await multitask (motor_dc_por_segundos(motorElevador, 600, -50),servo (20,90,500))
+    await multitask (motor_dc_por_grados(motorElevador, 15, 100),servo (20,60,100))
+    motorElevador.hold()
 
-async def bajar_cuadro():
-    await servo (20,237,1000)
+async def bajar_cuadro(espera=900):
+    await servo (20,237,espera)
 
-async def subir_cuadro():
-    await servo (20,65,1000)
+async def bajar_cuadro_poquito():
+    await servo (20,170,700)
 
+async def subir_cuadro(espera=600):
+    await servo (20,65,espera)
 async def cerrar_paletas():
-    await servo(19, 260,600)  # cerrar paletas
+    await servo(19, 270, 600)  # cerrar paletas
 
 async def abrir_paletas():
-    await servo(19, 30,600)  # abrir paletas
+    await servo(19, 95,600)  # abrir paletas
 
 async def abrir_garra():
     await motor_dc_por_segundos (motorgarra,1000,-90)
     motorgarra.hold()
 
 async def cerrar_garra():
-    await motor_dc_por_segundos (motorgarra,1500,80)
+    await motor_dc_por_segundos (motorgarra,1000,100)
     motorgarra.hold()
 
 async def cerrar_garra_poquito():
     await motor_dc_por_grados (motorgarra,45,80)
+
+async def abrir_garra_poquito():
+       await motor_dc_por_grados (motorgarra, 18, -90)
 
