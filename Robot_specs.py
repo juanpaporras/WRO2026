@@ -33,7 +33,7 @@ class Robot:
         self.drive_base.use_gyro(False)
         
         self.stopwatch = StopWatch()
-        self.hub.imu.settings(angular_velocity_threshold=3, acceleration_threshold=300)
+        # La configuración del IMU (hub.imu.settings) está en GyroMovement.py, en un solo lugar
 
     @classmethod
     def get_instance(cls):
