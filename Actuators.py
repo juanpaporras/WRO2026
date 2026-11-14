@@ -1,23 +1,13 @@
-from Extras import boton
 from pybricks.pupdevices import Motor
 from pybricks.parameters import Port
-from pybricks.tools import wait, run_task, multitask, StopWatch
-from Funciones_ESP32 import servo, mover_servo
+from pybricks.tools import wait, multitask, StopWatch
+from Funciones_ESP32 import servo
 # =============================================================================
 # INICIALIZACIÓN DE MOTORES DE ACCESORIOS
 # =============================================================================
 
-# motorgarras = Motor(Port.C)
 motorElevador = Motor(Port.E)
 motorgarra = Motor(Port.A)
-
-# =============================================================================
-# CONFIGURACIÓN BÁSICA DE ACTUADORES
-# =============================================================================
-
-def configurar_actuador(motor):
-    motor.control.limits(speed=1000, acceleration=2000, torque=None)
-    motor.control.pid(kp=500, ki=10, kd=100)
 
 # =============================================================================
 # FUNCIONES CINEMÁTICAS Y DE CONTROL DE ACCESORIOS
@@ -46,8 +36,27 @@ async def motor_dc_por_segundos(motor, milisegundos, potencia):
         await wait(10)
     motor.brake()
 
-async def subir_elevador_todo():
-    await motor_dc_por_segundos(motorElevador, 700, 90)
+async def motor_dc_hasta_tope(motor, potencia, tiempo_max_ms, vel_tope=60, tiempo_tope_ms=40, arranque_ms=120):
+    """Empuja con potencia hasta que el motor se FRENA contra su tope (o pasa tiempo_max_ms).
+    Termina apenas llega, en vez de esperar siempre el tiempo completo.
+    - vel_tope: °/s por debajo de esto = está contra el tope. Calibrar.
+    - tiempo_tope_ms: cuánto tiempo seguido debe estar frenado para confirmarlo.
+    - arranque_ms: al inicio no revisa (el motor parte desde 0 °/s)."""
+    cronometro = StopWatch()
+    cronometro_tope = StopWatch()
+    frenado = False
+    motor.dc(potencia)
+    while cronometro.time() < tiempo_max_ms:
+        if cronometro.time() > arranque_ms and abs(motor.speed()) < vel_tope:
+            if not frenado:
+                frenado = True
+                cronometro_tope.reset()
+            elif cronometro_tope.time() >= tiempo_tope_ms:
+                break
+        else:
+            frenado = False
+        await wait(10)
+    motor.brake()
 
 async def subir_elevador():
     await motor_dc_por_grados(motorElevador, 170, 100)
@@ -72,7 +81,8 @@ async def abrir_paletas():
     await servo(19, 95,600)  # abrir paletas
 
 async def abrir_garra():
-    await motor_dc_por_segundos (motorgarra,1000,-90)
+    # Abre hasta el tope (termina apenas llega); 1000 ms solo como seguridad
+    await motor_dc_hasta_tope (motorgarra, -90, 1000)
     motorgarra.hold()
 
 async def cerrar_garra():

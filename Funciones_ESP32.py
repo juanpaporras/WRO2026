@@ -2,8 +2,7 @@ from pybricks.parameters import Port
 from pybricks.tools import wait
 from pupremote import PUPRemoteHub
 
-ROJO = 5
-NOMBRES = {0: "?", 1: "Amarillo", 2: "Azul", 3: "Verde", 4: "Blanco", 5: "Rojo"}
+ROJO = 5   # 1 = Amarillo, 2 = Azul, 3 = Verde, 4 = Blanco, 5 = Rojo
 
 pr = None   # se crea en iniciar_esp32()
 

@@ -1,7 +1,4 @@
-import math
 from Robot_specs import get_robot
-from pybricks.pupdevices import Motor
-from pybricks.parameters import Port
 from pybricks.tools import wait, StopWatch
 
 # =============================================================================
@@ -18,6 +15,17 @@ right_motor = robot.right_motor
 # Umbral angular bajo = no confunde un giro lento real con bias (evita deriva).
 hub.imu.settings(angular_velocity_threshold=2.0, acceleration_threshold=250)  # Calibrar: si nunca recalibra (deriva estando quieto), subir un poco angular_velocity_threshold
 
+async def avance_preciso(distancia_mm, vel_mm_s=150):
+    """Avance (o retroceso si distancia_mm < 0) corto y PRECISO con el control de velocidad de
+    Pybricks (DriveBase.straight): recorre la misma distancia con cualquier batería o carga.
+    Termina frenado (hold). vel_mm_s: Calibrar."""
+    if distancia_mm == 0:
+        return
+    ajustes = robot.drive_base.settings()          # guarda los ajustes actuales
+    robot.drive_base.settings(straight_speed=vel_mm_s)
+    await robot.drive_base.straight(distancia_mm)
+    robot.drive_base.settings(*ajustes)            # y los restaura
+
 TOLERANCIA_RESET_HEADING = 8   # Calibrar: grados máximos de diferencia para aceptar un reset de heading contra pared/línea
 
 def reset_heading_seguro(nuevo_heading, tolerancia=TOLERANCIA_RESET_HEADING):
@@ -30,17 +38,6 @@ def reset_heading_seguro(nuevo_heading, tolerancia=TOLERANCIA_RESET_HEADING):
         return True
     print("reset_heading_seguro: NO resetea a", nuevo_heading, "| gyro:", hub.imu.heading(), "| diferencia:", diferencia)
     return False
-
-# =============================================================================
-# FUNCIONES AUXILIARES Y MATEMÁTICAS
-# =============================================================================
-
-def obtener_heading_normalizado():
-    raw_heading = hub.imu.heading()
-    return ((raw_heading + 180) % 360) - 180
-
-def normalizar_error_angular(error):
-    return ((error + 180) % 360) - 180
 
 # =============================================================================
 # FUNCIONES DE MOVIMIENTO Y GIROS (CONTROL DC + PD)
@@ -117,7 +114,7 @@ async def avance(target_heading, distancia_mm, max_dc=100.0, min_dc=30.0, accel_
 
 async def retrocede(target_heading, distancia_mm, max_dc=100.0, min_dc=30.0, accel_mm=50.0, decel_mm=140.0, kp=3.5, kd=0.18, freno=True, rampa_inicio=True):  # Calibrar min_dc: potencia mínima (arranque y final); muy baja = le cuesta arrancar
     # freno=False: no desacelera al final ni frena; los motores siguen girando para
-    #   encadenar con el siguiente movimiento (otro retrocede, retrocede_hasta_linea...) sin detenerse.
+    #   encadenar con el siguiente movimiento (otro retrocede, retrocede_hasta_pared...) sin detenerse.
     # rampa_inicio=False: arranca directo en max_dc (útil si viene de un movimiento sin freno).
     left_motor.reset_angle(0)
     right_motor.reset_angle(0)
@@ -305,8 +302,9 @@ async def avance_hasta_pared(target_heading, dc=60.0, distancia_max=1000.0, igno
     return choco
 
 
-async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, tolerancia=1, tiempo_estabilizacion=80, tiempo_max=3000):
+async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, tolerancia=1, tiempo_estabilizacion=40, tiempo_max=3000):
     # tiempo_max: seguridad (ms); si no llega al objetivo en ese tiempo, termina igual para no quedarse pegado.
+    # tiempo_estabilizacion: ms quieto dentro de la tolerancia para terminar (Calibrar: si queda corrido por inercia, subirlo)
     # Arranca la derivada con el error real para evitar el golpe del primer ciclo
     error_previo = ((target_heading - hub.imu.heading() + 180) % 360) - 180
     derivada_filtrada = 0.0
@@ -386,7 +384,7 @@ async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, toler
 
     left_motor.hold()
     right_motor.hold()
-    await wait(60)
+    await wait(20)   # Calibrar: pausa final (antes 60 ms); el hold ya mantiene la posición
 
 
 async def giro_arco(target_heading, radio_mm, velocidad_mm_s=250.0, adelante=True, vel_minima_mm_s=60.0, zona_frenado=20.0, tolerancia=1.0, tiempo_max=None, freno=True, lado=None):
@@ -470,33 +468,20 @@ async def giro_arco(target_heading, radio_mm, velocidad_mm_s=250.0, adelante=Tru
         right_motor.run(v_recto)
 
 
-async def giro_pivot(target_heading, pivote_izquierdo=True, vel_max=700.0, vel_min=60.0, aceleracion=1800.0, desaceleracion=2000.0, tolerancia=1, tiempo_estabilizacion=80, tiempo_max=3000, freno=True):
-    """Giro sobre una rueda (la otra queda frenada) con CONTROL DE VELOCIDAD (motor.run).
+async def giro_pivot(target_heading, pivote_izquierdo=True, max_dc=100.0, min_dc=35.0, kp=3.0, kd=0.08, zona_frenado=30.0, tolerancia=1, tiempo_estabilizacion=40, tiempo_max=3000, freno=True):
+    """Giro sobre una rueda (la otra queda frenada con hold) con CONTROL DC + PD del giroscopio.
 
-    El motor ajusta solo la fuerza necesaria para mantener la velocidad pedida, así que
-    no se estanca al final aunque arrastre todo el robot o la batería esté más baja.
-    Perfil trapezoidal: acelera parejo, crucero y frena parejo (desaceleración constante),
-    como un auto que frena suave hasta el punto exacto, sin arrastrarse al final.
-    - vel_max: velocidad de crucero de la rueda que empuja (°/s). Calibrar.
-    - vel_min: velocidad mínima solo para el último pedacito (°/s). Calibrar.
-    - aceleracion: °/s² al arrancar (más baja = arranque más suave). Calibrar.
-    - desaceleracion: °/s² al frenar (más baja = frena antes y más suave; más alta = frena
-      más tarde y más brusco; si se pasa del objetivo, bájala). Calibrar.
-    - freno=False: gira a vel_max, termina apenas llega o se pasa y no frena (para encadenar).
+    - Lejos del objetivo: potencia máxima (max_dc) para que sea rápido.
+    - Dentro de zona_frenado (grados): PD del gyro; el límite de potencia baja de max_dc a min_dc
+      en proporción a lo que falta, y la derivada frena el giro antes de pasarse.
+    - Anti-estancamiento: si la rueda que empuja casi no gira (min_dc no alcanza para arrastrar
+      el robot sobre una rueda), suma potencia extra rápido hasta que vuelva a moverse.
+    - Al entrar en la tolerancia frena las dos ruedas (hold) y espera tiempo_estabilizacion;
+      si se sale (inercia), vuelve a corregir.
+    - freno=False: va a max_dc, termina apenas llega o se pasa y deja la rueda girando (para encadenar).
+    Calibrar: min_dc (mínimo que mueve el robot sobre una rueda), zona_frenado (más grande = frena
+    antes; si se pasa del objetivo, súbela o sube kd), kp/kd.
     """
-    # En pivot la rueda que empuja recorre un círculo de radio = distancia entre ruedas:
-    # grados de rueda por cada grado que gira el robot = EJE / radio de rueda
-    EJE_MM = 152.0
-    RUEDA_POR_GRADO = EJE_MM / (63.0 / 2.0)   # ≈ 4.8
-    error_ang = ((target_heading - hub.imu.heading() + 180) % 360) - 180
-    signo_error_previo = 1 if error_ang > 0 else -1
-
-    cronometro_lazo = StopWatch()
-    cronometro_estabilizacion = StopWatch()
-    cronometro_total = StopWatch()
-    estabilizando = False
-    vel_anterior = 0.0
-
     if pivote_izquierdo:
         left_motor.hold()
         motor_empuja = right_motor
@@ -506,9 +491,23 @@ async def giro_pivot(target_heading, pivote_izquierdo=True, vel_max=700.0, vel_m
         motor_empuja = left_motor
         sentido_motor = 1    # girar a la derecha (error > 0) = rueda izquierda hacia adelante
 
+    # Arranca la derivada con el error real (evita el golpe del primer ciclo)
+    error_previo = ((target_heading - hub.imu.heading() + 180) % 360) - 180
+    signo_error_previo = 1 if error_previo > 0 else -1
+    derivada_filtrada = 0.0
+    ALFA_FILTRO = 0.35
+    VEL_ESTANCADO = 40.0     # Calibrar: °/s de la rueda por debajo de esto = estancada
+    EXTRA_MAX = 40.0         # Calibrar: potencia extra máxima del anti-estancamiento
+
+    cronometro_lazo = StopWatch()
+    cronometro_estabilizacion = StopWatch()
+    cronometro_total = StopWatch()
+    estabilizando = False
+    empuje_extra = 0.0
+
     while True:
         if cronometro_total.time() >= tiempo_max:
-            print("giro_pivot: tiempo máximo, objetivo", target_heading, "actual", hub.imu.heading())
+            print("giro_pivot: tiempo maximo, objetivo", target_heading, "actual", hub.imu.heading())
             break
 
         dt = cronometro_lazo.time() / 1000.0
@@ -522,122 +521,16 @@ async def giro_pivot(target_heading, pivote_izquierdo=True, vel_max=700.0, vel_m
         # Sin freno: termina en cuanto llega o se pasa, sin estabilizar ni frenar
         if not freno and (abs_error <= tolerancia or signo_error != signo_error_previo):
             break
-
-        if signo_error != signo_error_previo:
-            vel_anterior = 0.0   # se pasó: vuelve despacio en sentido contrario
-        signo_error_previo = signo_error
-
-        if abs_error <= tolerancia:
-            left_motor.hold()
-            right_motor.hold()
-            vel_anterior = 0.0
-            if not estabilizando:
-                estabilizando = True
-                cronometro_estabilizacion.reset()
-            elif cronometro_estabilizacion.time() >= tiempo_estabilizacion:
-                break
-        else:
-            estabilizando = False
-
-            # Velocidad objetivo: frenado con desaceleración constante, v = √(2·a·d),
-            # d = grados de rueda que faltan. Baja suave y parejo hasta el objetivo.
-            if freno:
-                grados_rueda_faltan = abs_error * RUEDA_POR_GRADO
-                vel_frenado = (2.0 * desaceleracion * grados_rueda_faltan) ** 0.5
-                vel_objetivo = max(min(vel_frenado, vel_max), vel_min)
-            else:
-                vel_objetivo = vel_max
-
-            # Rampa de arranque (solo limita la subida; la bajada la da el perfil de frenado)
-            vel = min(vel_objetivo, vel_anterior + aceleracion * dt)
-            vel = max(vel, vel_min)
-            vel_anterior = vel
-
-            motor_empuja.run(sentido_motor * signo_error * vel)
-
-        await wait(10)
-
-    if freno:
-        left_motor.hold()
-        right_motor.hold()
-        await wait(60)
-    # Sin freno: la rueda sigue girando a la última velocidad hasta la siguiente orden
-
-async def giro_pivot_dc(target_heading, pivote_izquierdo=True, max_dc=80.0, min_dc=28.0, kp=2.2, kd=0.15, tolerancia=1, tiempo_estabilizacion=80, tiempo_max=3000, freno=True):
-    # VERSIÓN ANTERIOR (control por potencia dc). Se deja para comparar; giro_pivot usa control de velocidad.
-    # freno=False: gira a max_dc todo el tiempo (sin desacelerar), termina apenas llega o se pasa
-    #   del objetivo y no frena: los motores quedan con la última potencia para encadenar
-    #   con el siguiente movimiento (avance, retrocede, seguir línea...) sin detenerse.
-    # min_dc: Calibrar. En pivot UNA sola rueda arrastra todo el robot, necesita más potencia mínima que el giro normal.
-    # tiempo_max: seguridad (ms); si no llega al objetivo en ese tiempo, termina igual para no quedarse pegado.
-    # Arranca la derivada con el error real para evitar el golpe del primer ciclo
-    error_previo = ((target_heading - hub.imu.heading() + 180) % 360) - 180
-    derivada_filtrada = 0.0
-    ALFA_FILTRO = 0.35
-
-    cronometro_lazo = StopWatch()
-    cronometro_estabilizacion = StopWatch()
-    cronometro_total = StopWatch()
-    cronometro_lazo.reset()
-    cronometro_estabilizacion.reset()
-
-    estabilizando = False
-
-    # Anti-estancamiento: si la rueda que empuja casi no gira, se va sumando potencia extra.
-    # Se mide con la velocidad del motor (más fiable que el giroscopio a baja velocidad).
-    empuje_extra = 0.0
-    VEL_ESTANCADO = 60.0     # Calibrar: °/s de la rueda por debajo de esto = estancado
-    EMPUJE_MAX = 45.0        # Calibrar: potencia extra máxima que se puede sumar
-    signo_error_previo = 1 if error_previo > 0 else -1
-
-    if pivote_izquierdo:
-        left_motor.hold()
-        motor_empuja = right_motor
-    else:
-        right_motor.hold()
-        motor_empuja = left_motor
-
-    while True:
-        if cronometro_total.time() >= tiempo_max:
-            break
-
-        dt = cronometro_lazo.time() / 1000.0
-        cronometro_lazo.reset()
-        if dt <= 0.005: dt = 0.01
-
-        heading_actual = hub.imu.heading()
-        error_ang = target_heading - heading_actual
-        error_ang = (error_ang + 180) % 360 - 180
-        abs_error = abs(error_ang)
-
-        signo_error = 1 if error_ang > 0 else -1
-
-        # Sin freno: termina en cuanto llega o se pasa, sin estabilizar ni frenar
-        if not freno and (abs_error <= tolerancia or signo_error != signo_error_previo):
-            break
-
-        if signo_error != signo_error_previo:
-            # Se pasó del objetivo: quita el empuje extra para no rebotar al otro lado
-            empuje_extra = 0.0
-        elif abs_error > tolerancia:
-            vel_rueda = abs(motor_empuja.speed())
-            if vel_rueda < VEL_ESTANCADO:
-                # Estancado: sube el empuje (≈ +15% de potencia cada 100 ms)
-                empuje_extra = min(empuje_extra + 1.5, EMPUJE_MAX)
-            elif vel_rueda > 2 * VEL_ESTANCADO:
-                # Ya se mueve bien: baja el empuje despacio (no de golpe, para no volver a frenarse)
-                empuje_extra = max(empuje_extra - 0.5, 0.0)
         signo_error_previo = signo_error
 
         derivada_cruda = (error_ang - error_previo) / dt
         derivada_filtrada = (derivada_filtrada * (1.0 - ALFA_FILTRO)) + (derivada_cruda * ALFA_FILTRO)
-        
-        termino_d = kd * derivada_filtrada
+        error_previo = error_ang
 
         if abs_error <= tolerancia:
             left_motor.hold()
             right_motor.hold()
-            
+            empuje_extra = 0.0
             if not estabilizando:
                 estabilizando = True
                 cronometro_estabilizacion.reset()
@@ -645,36 +538,33 @@ async def giro_pivot_dc(target_heading, pivote_izquierdo=True, max_dc=80.0, min_
                 break
         else:
             estabilizando = False
-            
-            ZONA_FRENADO = 30.0
-            if not freno or abs_error > ZONA_FRENADO:
-                limite_dc = max_dc
-                termino_p = max_dc if error_ang > 0 else -max_dc
+
+            if not freno or abs_error > zona_frenado:
+                salida = max_dc * signo_error
             else:
-                proporcion = abs_error / ZONA_FRENADO
-                limite_dc = min_dc + (max_dc - min_dc) * proporcion
-                termino_p = kp * error_ang
+                # Zona de frenado: PD con límite que baja en proporción a lo que falta
+                limite = min_dc + (max_dc - min_dc) * (abs_error / zona_frenado)
+                salida = kp * error_ang + kd * derivada_filtrada
+                salida = max(min(salida, limite), -limite)
 
-            if freno:
-                salida_pd = termino_p + termino_d
-                salida_aplicada = max(min(salida_pd, limite_dc), -limite_dc)
-            else:
-                salida_aplicada = termino_p   # potencia fija, sin PD que la reduzca
+                # Anti-estancamiento según la velocidad REAL de la rueda que empuja
+                if abs(motor_empuja.speed()) < VEL_ESTANCADO:
+                    empuje_extra = min(empuje_extra + 3.0, EXTRA_MAX)
+                else:
+                    empuje_extra = max(empuje_extra - 2.0, 0.0)
 
-            minimo = min_dc + empuje_extra   # mínimo + extra si está estancado
-            if abs(salida_aplicada) < minimo:
-                salida_aplicada = minimo if error_ang > 0 else -minimo
+                # Nunca por debajo del mínimo que mueve al robot (+ extra si está estancado),
+                # siempre hacia el objetivo
+                minimo = min(min_dc + empuje_extra, max_dc)
+                if abs(salida) < minimo:
+                    salida = minimo * signo_error
 
-            if pivote_izquierdo:
-                right_motor.dc(-salida_aplicada)
-            else:
-                left_motor.dc(salida_aplicada)
+            motor_empuja.dc(sentido_motor * salida)
 
-        error_previo = error_ang
         await wait(10)
 
     if freno:
         left_motor.hold()
         right_motor.hold()
-        await wait(60)
-    # Sin freno: los motores quedan con la última potencia hasta la siguiente orden
+        await wait(20)   # Calibrar: pausa final (antes 60 ms); el hold ya mantiene la posición
+    # Sin freno: la rueda sigue girando con la última potencia hasta la siguiente orden

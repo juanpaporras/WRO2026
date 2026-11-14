@@ -1,0 +1,13 @@
+Carpeta para los registros del seguidor de línea.
+
+1. En Run() descomentar:  await Ruta_prueba_seguidor()  (y comentar las otras rutas).
+2. Poner el robot en la línea de abajo (0), sobre la línea vertical, mirando a 0, y correrlo.
+3. Al terminar, la consola imprime el registro POR PÁGINAS (la consola solo muestra ~50 líneas):
+   - Copia desde INICIO_PAGINA hasta FIN_PAGINA y pégalo al final de: logs/seguidor.txt
+   - Presiona el botón CENTRAL del hub para la siguiente página (el hub pita mientras espera).
+   - Repite hasta que salga FIN_REGISTRO.
+4. Pedirle a Claude que lo analice.
+
+Cada línea trae varias muestras separadas por ';'. Cada muestra:
+t (ms), tramo (1 = subida, 2 = bajada), mm, ancho, err_sensor, setpoint,
+giro (°/s), heading_x10, vel (mm/s), modo (0 PD, 1 cruzando línea, 2 sin línea, 3 corrigió heading), lineas.
