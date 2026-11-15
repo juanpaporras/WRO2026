@@ -2,11 +2,11 @@ from pybricks.tools import wait, run_task, multitask
 from urandom import randint, seed
 
 # Importación de módulos propios organizados
-from GyroMovement import hub, left_motor, right_motor, avance, retrocede, retrocede_hasta_pared, avance_hasta_pared, giro, giro_pivot, giro_arco, reset_heading_seguro, avance_preciso
-from Line_sensors import diagnostico_espectral_mbc, seguir_linea_distancia, seguir_linea_hasta_interseccion, avance_hasta_linea, seguir_linea_contando_lineas, Registro, retroceder_hasta_linea
+from GyroMovement import hub, left_motor, right_motor, avance, retrocede, retrocede_hasta_pared, avance_hasta_pared, giro, giro_pivot, giro_arco, reset_heading_seguro, avance_preciso, agarrar_derecha,agarrar_izquierda
+from Line_sensors import diagnostico_espectral_mbc, seguir_linea_distancia, seguir_linea_hasta_interseccion, avance_hasta_linea, seguir_linea_contando_lineas, Registro, retroceder_hasta_linea, retrocede_hasta_linea
 from Actuators import (
     motorElevador, motorgarra,
-    subir_elevador, bajar_elevador,
+    subir_elevador, subir_elevador_todo, bajar_elevador,
     bajar_cuadro, subir_cuadro, cerrar_paletas, abrir_paletas,
     abrir_garra, cerrar_garra, cerrar_garra_poquito, abrir_garra_poquito,
     motor_dc_por_grados, motor_dc_por_segundos, bajar_cuadro_poquito
@@ -30,6 +30,8 @@ llevadas = 0                 # Poner 0 antes de usar la lógica
 
 # Cámara (lectura_camara)
 izquierda, derecha, lado_rojo = [], [], -1
+ROJO_LECTURA = 5             # Valor del rojo en las listas de la cámara
+color_mayoria = None         # Color del lado mayoría (lo calcula reservar_mayoria una sola vez)
 
 # =============================================================================
 # LÓGICA DE MOVIMIENTO (seguir la línea vertical contando líneas)
@@ -50,15 +52,16 @@ DISTANCIA_PRIMERA_FILA = 110  # Calibrar: mm a -90 desde la línea vertical hast
 PASO_COLUMNA = 32             # Calibrar: mm extra por cada fila de bloques más al fondo
 DC_RECOLECCION = 55           # Calibrar: potencia MÁXIMA del avance a -90 (al llegar al bloque igual baja a min_dc=30 por la rampa de frenado de avance)
 DC_RETROCESO_RECOLECCION = 85 # Calibrar: potencia del retroceso con el bloque (si el bloque se suelta al arrancar, bajarla)
+RETROCESO_AGARRE = 110        # Calibrar: mm EXTRA de retroceso cuando lo que sigue es agarrar (logica_de_comer)
 
 # =============================================================================
-# LLEVAR A DESCARGA
+# LLEVAR A MOSAICO IZQUIERDA (antes: descarga con llevadas == 2)
 # =============================================================================
-DESCARGA_AVANCE = 120         # Calibrar: del carril hasta la zona de descarga (mirando a 90)
-DESCARGA_ADENTRO = 2          # Calibrar: mm hacia adentro (3 izq -> hacia 180, 2 der -> hacia 0) en las descargas con llevadas 0 y 1. Negativo = más hacia AFUERA (lejos de la línea central)
-DESCARGA_UN_BLOQUE = 30       # Calibrar: montaje EXTRA en la descarga con llevadas == 2 (junta los 2 últimos con los otros 4)
+DESCARGA_AVANCE = 220         # Calibrar: del carril hasta la zona de descarga (mirando a 90); el mosaico sigue la línea DESCARGA_AVANCE + 100
+DESCARGA_UN_BLOQUE = 30       # Calibrar: mm hacia adentro (al centro, entre la línea 2 y la 3) antes de girar a 90
 VEL_REFERENCIA_DESCARGA = 100 # Calibrar: mm/s al retroceder buscando la línea (más lento = detecta en un punto más exacto)
 VEL_AJUSTE_DESCARGA = 150     # Calibrar: mm/s del avance fijo después de detectar la línea
+BUSQUEDA_LINEA_MM = 90        # Calibrar: mm que re_referenciar_lado busca la línea hacia ATRÁS antes de buscarla adelante (menos que lo que falta a la línea vecina, ~155 mm entre líneas)
 
 # =============================================================================
 # AGARRAR ROJO (cuadro gris arriba a la derecha, desde la posición 4 lado izquierdo)
@@ -68,21 +71,51 @@ ROJO_AVANCE_50 = 120          # Calibrar: mm de avance a 56° hasta que la garra
 # =============================================================================
 # CÁMARA
 # =============================================================================
+INTENTOS_CAMARA = 3                      # Calibrar: lecturas antes de usar el plan B (cada una espera hasta 3 s)
+LECTURA_DEFECTO_IZQ = [1, 1, 2, 5, 3, 4] # Calibrar: lectura de respaldo si la cámara no lee nada
+LECTURA_DEFECTO_DER = [1, 1, 2, 3, 4, 3] # Calibrar: lectura de respaldo si la cámara no lee nada
+
 async def lectura_camara():
+    """Lee la cámara hasta INTENTOS_CAMARA veces. Devuelve True si la lectura fue completa
+    (6 + 6 valores y se vio el rojo). Si no, aplica un plan B para que las rutas no fallen:
+    - Se leyeron las 12 casillas pero no el rojo -> lado_rojo = 0 (izquierda con lógica, derecha por mayoría).
+    - No se leyó nada -> usa LECTURA_DEFECTO_IZQ / LECTURA_DEFECTO_DER."""
     global izquierda, derecha, lado_rojo
-    izquierda, derecha, lado_rojo, _, _, _ = await leer_camara()
+    for intento in range(INTENTOS_CAMARA):
+        izquierda, derecha, lado_rojo, _, _, _ = await leer_camara()
+        if len(izquierda) == 6 and len(derecha) == 6 and lado_rojo != -1:
+            print("Cámara:", izquierda, derecha, "| lado_rojo:", lado_rojo)
+            return True
+        print("Cámara: lectura incompleta, intento", intento + 1, "de", INTENTOS_CAMARA)
 
+    if len(izquierda) == 6 and len(derecha) == 6:
+        lado_rojo = 0
+        print("Cámara: no se vio el rojo -> se usa lado_rojo = 0")
+    else:
+        izquierda, derecha, lado_rojo = list(LECTURA_DEFECTO_IZQ), list(LECTURA_DEFECTO_DER), 0
+        print("Cámara: SIN lectura -> se usa la lectura de respaldo")
+    return False
 
-async def logica_de_recoleccion():
+async def logica_de_recoleccion(sigue_agarrar=False, fila=None):
+    # fila=None: la fila sale de colores[lectura[i]] y se descuenta el bloque (resolver_lecturas).
+    # fila=0, 1, 2: usa esa fila directamente y NO toca colores (agarrar_mayoria: el color está reservado en 0).
     # Desde la línea vertical: gira a -90, avanza recto (gyro) hasta la fila del bloque,
     # agarra y retrocede EXACTAMENTE lo mismo para volver a la línea vertical.
-    await multitask (cerrar_garra_poquito(), giro(-90))
-    avanzar =(6 - colores[lectura[i]]) // 2 #Calcula cuantas filas de bloques hay que avanzar para llegar al bloque objetivo
+    # sigue_agarrar=True: después viene logica_de_comer -> retrocede RETROCESO_AGARRE de más.
+    # En la línea 4 NO se suma aquí: logica_de_comer primero baja a la 3 siguiendo la línea
+    # (necesita estar sobre ella) y suma el retroceso allá.
+    await multitask (cerrar_garra_poquito(), giro(-90,70))
+    if fila is None:
+        avanzar =(6 - colores[lectura[i]]) // 2 #Calcula cuantas filas de bloques hay que avanzar para llegar al bloque objetivo
+    else:
+        avanzar = fila
     distancia = DISTANCIA_PRIMERA_FILA + PASO_COLUMNA * avanzar   #Calibrar: PASO_COLUMNA = distancia entre filas de bloques
     await multitask(avance(-90, distancia, DC_RECOLECCION), abrir_garra())
     await cerrar_garra_poquito()
-    await retrocede(-90, distancia, max_dc=DC_RETROCESO_RECOLECCION, accel_mm=80) # Mismo valor que avanzó: vuelve a la línea vertical
-    colores[lectura[i]] -= 1 #Resta uno a la cantidad de bloques del color objetivo
+    extra = RETROCESO_AGARRE if (sigue_agarrar and posicion_actual != 4) else 0
+    await retrocede(-90, distancia + extra, max_dc=DC_RETROCESO_RECOLECCION, accel_mm=80) # Mismo valor que avanzó: vuelve a la línea vertical (+ extra si sigue agarrar)
+    if fila is None:
+        colores[lectura[i]] -= 1 #Resta uno a la cantidad de bloques del color objetivo
 
 async def logica_de_movimiento(objetivo, lado_posicion_objetivo, distancia_montaje=None, montaje_extra=0):
     # distancia_montaje=None: usa DISTANCIA_MONTAJE / MONTAJE_SIN_CAMBIO según el lado.
@@ -138,26 +171,20 @@ async def logica_de_movimiento(objetivo, lado_posicion_objetivo, distancia_monta
         elif montaje_extra > 0:
             print("logica_de_movimiento: ya está en la posición y lado, NO se aplica el montaje_extra de", montaje_extra)
 
-async def llevar_a_descarga():
+async def llevar_a_mosaico_izquierda():
+    """Lleva los bloques al mosaico izquierdo (lo que antes era la descarga con llevadas == 2).
+    No la llama la lógica: se llama en la ruta cuando resolver_lecturas termina."""
     global posicion_actual, lado_posicion_actual
     # lado_posicion_objetivo: diferente de 0 = lado IZQUIERDO, 0 = lado DERECHO
-    # montaje_extra = mm que queda MÁS HACIA ADENTRO (hacia la rama de descarga entre la 2 y la 3):
-    # en la 3 (izquierda) hacia 180, en la 2 (derecha) hacia 0.
-    if llevadas == 0:
-        destino, lado_posicion_objetivo = 3, 1      # posición 3, lado izquierdo
-        montaje_extra = DESCARGA_ADENTRO
-    elif llevadas == 1:
-        destino, lado_posicion_objetivo = 2, 0      # posición 2, lado derecho
-        montaje_extra = DESCARGA_ADENTRO
+    # Va a la línea de descarga más cercana y se monta DESCARGA_UN_BLOQUE hacia adentro (al centro,
+    # entre la línea 2 y la 3).
+    montaje_extra = DESCARGA_UN_BLOQUE
+    if posicion_actual >= 3:
+        destino, lado_posicion_objetivo = 3, 1  # posición 3, lado izquierdo
     else:
-        # llevadas == 2: va a la más cercana y se monta un bloque extra (al centro, con los otros 4)
-        montaje_extra = DESCARGA_UN_BLOQUE
-        if posicion_actual >= 3:
-            destino, lado_posicion_objetivo = 3, 1  # posición 3, lado izquierdo
-        else:
-            destino, lado_posicion_objetivo = 2, 0  # posición 2, lado derecho
+        destino, lado_posicion_objetivo = 2, 0  # posición 2, lado derecho
 
-    # 1) Llega cerca de la línea de descarga (si ya está en esa línea, no se mueve:
+    # 1) Llega cerca de la línea (si ya está en esa línea, no se mueve:
     #    la re-referencia de abajo lo deja en el lado correcto venga del lado que venga)
     objetivo = destino - posicion_actual
     if objetivo != 0:
@@ -167,8 +194,8 @@ async def llevar_a_descarga():
     # 2) RE-REFERENCIA (misma posición final venga por donde venga):
     #    mira a 0 (línea 3) o a 180 (línea 2), retrocede despacio hasta que el sensor ve la línea
     #    de color y avanza una distancia fija con control de velocidad.
-    #    El sensor va ~50 mm delante del eje, así que en cualquier punto cerca de la posición de
-    #    descarga la línea queda DETRÁS del sensor y retrocediendo siempre la encuentra.
+    #    El sensor va ~50 mm delante del eje, así que cerca de la posición la línea queda DETRÁS
+    #    del sensor y retrocediendo siempre la encuentra.
     #    "Hacia adentro" es hacia atrás en los dos casos, por eso el extra se RESTA.
     heading_ref = 0 if destino == 3 else 180
     await giro(heading_ref)
@@ -177,32 +204,29 @@ async def llevar_a_descarga():
     posicion_actual = destino
     lado_posicion_actual = 0 if lado_posicion_objetivo != 0 else 1
 
+    # 3) Hacia el mosaico
     await giro(90, 80)
-    if llevadas == 2:
-        # Ya está sobre la línea: no hace falta avance_hasta_linea (no tenía montaje)
-        await abrir_garra_poquito ()
-        await seguir_linea_distancia (distancia_mm=DESCARGA_AVANCE+100, vel_crucero_mm_s=100) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
-        await retrocede (90,22,50)
-        await cerrar_garra()
+    await seguir_linea_distancia (distancia_mm=DESCARGA_AVANCE, vel_crucero_mm_s=100) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
+    await subir_elevador_todo()
+    await retrocede (90,150,50)
+    await bajar_elevador()
+    await avance (90,100,50)
+    await cerrar_garra()
+
+async def logica_de_comer():
+    """Cada 2 bloques el robot se los "come" (sin ir a descargar ni usar la logica de movimiento).
+    llevadas == 0 -> agarrar_izquierda | llevadas == 1 -> agarrar_derecha.
+    Si está en la línea 4 NO come ahí: baja a la 3 (arriba, lado derecho) y gira a -90 antes de comer."""
+    if posicion_actual == 4:
+        await logica_de_movimiento(-1, 0)   # 4 -> 3, lado derecho (arriba de la 3, MONTAJE_SIN_CAMBIO)
+        await cerrar_garra_poquito()
+        await giro(-90)
+        await retrocede(-90, RETROCESO_AGARRE, max_dc=DC_RETROCESO_RECOLECCION, accel_mm=80)  # el mismo retroceso extra que en logica_de_recoleccion
+
+    if llevadas == 0:
+        await agarrar_izquierda()
     elif llevadas == 1:
-       montaje_descarga = DESCARGA_AVANCE-20   # Calibrar: lo que se monta en la descarga con llevadas == 1
-       await multitask( abrir_garra(),  avance(90, montaje_descarga, max_dc=60)) # Ya está en la línea: avanza directo la distancia del montaje
-       await multitask (giro (88), cerrar_garra_poquito())
-    else:
-        montaje_descarga = DESCARGA_AVANCE      # Calibrar: lo que se monta en la descarga con llevadas == 0
-        await multitask (abrir_garra(), avance(90, montaje_descarga, max_dc=60)) #Calibrar: ya está en la línea, avanza directo la distancia del montaje hasta la zona de descarga
-        await multitask (giro (92),cerrar_garra_poquito())
-    if llevadas != 2:
-        await giro(90,40)
-        # Retrocede lo MISMO que se montó en cada caso (menos el ajuste de -5)
-        await multitask(abrir_garra(),retrocede(90, montaje_descarga-5) )#Calibrar: retrocede lo que avanzó para volver a la línea vertical
-        # Ya no va a la pared: queda sobre la línea vertical y sigue con la logica de movimiento
-        if llevadas == 0:
-            posicion_actual = 3
-            lado_posicion_actual = 0 #Posición 3, lado izquierdo
-        else:
-            posicion_actual = 2
-            lado_posicion_actual = 1 #Posición 2, lado derecho
+        await agarrar_derecha()
 
 async def agarrar_rojo():
     global posicion_actual, lado_posicion_actual
@@ -214,9 +238,10 @@ async def agarrar_rojo():
     await giro(56)
     await multitask (abrir_garra(), avance(56, ROJO_AVANCE_50, max_dc=70)) #Calibrar para que el robot avance hasta agarrar el rojo
     await cerrar_garra_poquito()
-    await retrocede(56, ROJO_AVANCE_50+ 10) #Calibrar para que el robot retroceda lo mismo que avanzó para agarrar el rojo
+    await retrocede(56, ROJO_AVANCE_50) #Calibrar para que el robot retroceda lo mismo que avanzó para agarrar el rojo
     posicion_actual = 4 #El robot está en la posición 4 y lado izquierdo
     lado_posicion_actual = 0 #El robot está en la posición 4 y lado izquierdo
+    # Si después toca comer, logica_de_comer baja a la 3 y gira a -90 (no se come en la 4)
 
 def color_menos_agarrado():
     """Devuelve el color (1-4) que MÁS bloques tiene todavía (el menos agarrado), porque sus
@@ -231,18 +256,50 @@ def color_menos_agarrado():
             mejor = c
     return mejor
 
+async def re_referenciar_lado(lado_posicion_objetivo):
+    """Deja el robot EXACTAMENTE en el lado pedido de la línea actual, aunque venga corrido.
+    Se usa después de comer cuando el siguiente bloque es en la MISMA línea: agarrar_izquierda deja
+    el robot más arriba (derecha) y agarrar_derecha más abajo (izquierda) de lo que cree la lógica.
+    Rumbo según el lado donde ESTÁ (mirando hacia afuera de la línea):
+    lado actual derecha (arriba) -> mira a 0; lado actual izquierda (abajo) -> mira a 180.
+    Como el corrimiento puede dejar el sensor de cualquier lado de la línea, la busca en DOS sentidos:
+    1) retrocede hasta BUSQUEDA_LINEA_MM (corto, para no llegar a la línea vecina);
+    2) si no la vio, la línea está adelante: avanza hasta 2 * BUSQUEDA_LINEA_MM (vuelve al inicio y sigue).
+    En los dos casos termina con el sensor sobre la línea y mirando a heading_ref, y luego avanza
+    lo mismo que usaría logica_de_movimiento con ese rumbo:
+    - el lado pedido está hacia donde mira -> DISTANCIA_MONTAJE (78 mm)
+    - el lado pedido está detrás            -> MONTAJE_SIN_CAMBIO (18 mm)"""
+    global heading_objetivo, lado_posicion_actual
+    heading_ref = 0 if lado_posicion_actual == 1 else 180
+    await giro(heading_ref)
+    encontrada = await retroceder_hasta_linea(heading_ref, vel_mm_s=VEL_REFERENCIA_DESCARGA, distancia_max=BUSQUEDA_LINEA_MM)
+    if not encontrada:
+        # No estaba atrás: el sensor quedó antes de la línea -> buscarla hacia ADELANTE
+        # (retroceder_hasta_linea con velocidad negativa avanza)
+        print("re_referenciar_lado: línea no está atrás, se busca adelante")
+        encontrada = await retroceder_hasta_linea(heading_ref, vel_mm_s=-VEL_REFERENCIA_DESCARGA, distancia_max=2 * BUSQUEDA_LINEA_MM)
+    if not encontrada:
+        print("re_referenciar_lado: NO encontró la línea en ningún sentido (¿robot muy corrido?)")
+    # Igual que montarse_final en logica_de_movimiento
+    montarse_final = (lado_posicion_objetivo == 0 and heading_ref == 0) or (lado_posicion_objetivo != 0 and heading_ref == 180)
+    await avance_preciso(DISTANCIA_MONTAJE if montarse_final else MONTAJE_SIN_CAMBIO, vel_mm_s=VEL_AJUSTE_DESCARGA)   # Calibrar
+    heading_objetivo = heading_ref
+    lado_posicion_actual = 1 if lado_posicion_objetivo == 0 else 0
+
 async def   resolver_lecturas():
     global i, llevadas
     contador = 0
+    recien_comio = False   # True justo después de logica_de_comer (el robot puede quedar corrido)
     for i in range(len(lectura)): #Recorre la lista de lecturas
-        if llevadas == 3: #Si ya llevó 3 bloques termina la función y no hace nada más
-            break
-        if lectura[i] < 5 and colores[lectura[i]] == 0: #Si el color objetivo ya no tiene bloques, lo cambia por el color MENOS agarrado (bloques en las primeras filas = más seguro)
+        # Valor inválido de la cámara (0 = casilla no leída, o cualquier cosa fuera de 1-5): se trata
+        # igual que un color sin bloques. Sin esto, colores[0] da KeyError y un valor > 5 iría a agarrar_rojo.
+        invalido = lectura[i] not in (1, 2, 3, 4, 5)
+        if invalido or (lectura[i] < 5 and colores[lectura[i]] == 0): #Si el color objetivo ya no tiene bloques (o es inválido), lo cambia por el color MENOS agarrado (bloques en las primeras filas = más seguro)
             reemplazo = color_menos_agarrado()
             if reemplazo is None:
                 print("No quedan bloques de ningún color")
                 break
-            print("Color", lectura[i], "sin bloques -> se reemplaza por", reemplazo)
+            print("Color", lectura[i], "inválido" if invalido else "sin bloques", "-> se reemplaza por", reemplazo)
             lectura[i] = reemplazo
 
         if lectura[i] <5: # Si la lectura no es roja
@@ -253,34 +310,103 @@ async def   resolver_lecturas():
             lado_posicion_objetivo = colores[lectura[i]]%2 # Si el bloque es par, el lado objetivo es 0 (DERECHA), si es impar, el lado objetivo es diferente de 0 (IZQUIERDA)
 
             objetivo = lectura[i] - posicion_actual # Calcula la diferencia entre la posición actual y la posición objetivo, me dice cuanto debo moverme para llegar al color objetivo
-            await logica_de_movimiento(objetivo, lado_posicion_objetivo)
+            if recien_comio and objetivo == 0:
+                # Misma línea después de comer: la agarra dejó el robot corrido -> re-referencia
+                # con la línea de color (sirve para el mismo lado y para cambiar de lado)
+                await re_referenciar_lado(lado_posicion_objetivo)
+            else:
+                await logica_de_movimiento(objetivo, lado_posicion_objetivo)
              # Espera a que el robot esté en la posición correcta y el botón sea presionado para continuar
 
             """
             LOGICA PARA AVANZAR Y RECOGER EL BLOQUE
             """
-            await logica_de_recoleccion()
-            contador += 1
-            if contador >1:
-                """
-                LOGICA PARA LLEVAR LOS BLOQUES A LA ZONA DE DESCARGA
-                """
-                await llevar_a_descarga() 
-                llevadas += 1
-                contador =0
-        else: 
+            # Sigue agarrar si es el 2do bloque del par (contador == 1) y todavía se come (llevadas < 2)
+            await logica_de_recoleccion(sigue_agarrar=(contador == 1 and llevadas < 2))
+        else:
             """
             Logica para cuando la lectura es roja
             """
             await agarrar_rojo()
-            contador += 1
-            if contador >1:
-                """
-                Si con el rojo ya completó 2, también lleva a la zona de descarga
-                """
-                await llevar_a_descarga()
-                llevadas += 1
-                contador =0
+
+        recien_comio = False
+        contador += 1
+        if contador > 1:
+            """
+            LOGICA PARA COMER: cada 2 bloques se los come (sin ir a descargar).
+            Con llevadas == 2 (tercer par) termina la lógica: esos 2 quedan en la garra
+            y en la ruta se llama llevar_a_mosaico_izquierda().
+            """
+            if llevadas >= 2:
+                break
+            await logica_de_comer()
+            llevadas += 1
+            contador = 0
+            recien_comio = True
+
+async def agarrar_mayoria(color_mayoria):
+    if color_mayoria is None:   # no hubo color válido en el lado mayoría: no se mueve (evita el error None - posicion_actual)
+        print("agarrar_mayoria: sin color mayoría, se salta")
+        return
+    # 1) Va a la línea del color mayoría, lado DERECHO (objetivo es RELATIVO: cuántas líneas moverse)
+    await logica_de_movimiento(color_mayoria - posicion_actual, 0)
+    # 2) Agarra el bloque derecho de la 1ª fila (fila=0: no toca colores, el color está reservado)
+    await logica_de_recoleccion(fila=0)
+    # 3) Cambia al lado IZQUIERDO en la misma línea (avance de DISTANCIA_CAMBIO_LADO, sin comer)
+    await logica_de_movimiento(0, 1)
+    # 4) Agarra el bloque izquierdo de la 1ª fila y retrocede a la línea vertical (NO se los come)
+    await logica_de_recoleccion(fila=0)
+    await giro (0)
+    await avance(0,DISTANCIA_CAMBIO_LADO/2)
+    await multitask (giro(-90),cerrar_garra())
+    await multitask(seguir_linea_hasta_interseccion("centro",200,montarse=True,distancia_montaje=200),subir_elevador_todo())
+    await bajar_elevador()
+    await multitask (retrocede(-90,360,50),bajar_elevador())
+  
+
+def sacar_mayoria(izquierda, derecha, lado_rojo_idx=None):
+    """Elige el color (1-4) para el lado que se llena por MAYORÍA (el lado SIN rojo).
+    El lado mayoría usa los 6 bloques del color elegido, así que ese color ya no queda para
+    el lado rojo (el que se resuelve con resolver_lecturas): cada casilla de ese color en el
+    lado rojo es un punto perdido.
+    Puntaje de cada color = casillas en el lado sin rojo - casillas en el lado rojo.
+    (Incluye la regla de "si en el lado rojo hay más, agarrar el segundo color con mayoría",
+    pero compara TODOS los colores, no solo el primero y el segundo.)
+    Empate: el que más casillas tiene en el lado sin rojo; si sigue empatado, el primero
+    que aparece en la lista del lado sin rojo.
+    lado_rojo_idx: 0 = izquierda, 1 = derecha (el lado_rojo de la cámara). Si no se da,
+    se busca el 5 (si la cámara confundiera un color con rojo en los dos lados, ganaría la izquierda)."""
+    if lado_rojo_idx == 0:
+        lado_rojo_lista, lado_mayoria = izquierda, derecha
+    elif lado_rojo_idx == 1:
+        lado_rojo_lista, lado_mayoria = derecha, izquierda
+    elif ROJO_LECTURA in izquierda:
+        lado_rojo_lista, lado_mayoria = izquierda, derecha
+    else:
+        lado_rojo_lista, lado_mayoria = derecha, izquierda
+
+    mejor, mejor_puntaje, mejor_casillas = None, None, -1
+    for c in lado_mayoria:          # en orden de la lista -> desempate por el primero que aparece
+        if c not in (1, 2, 3, 4) or c == mejor:   # salta el rojo y cualquier valor raro de la cámara
+            continue
+        casillas = lado_mayoria.count(c)
+        perdidos = lado_rojo_lista.count(c)
+        puntaje = casillas - perdidos
+        if mejor is None or puntaje > mejor_puntaje or (puntaje == mejor_puntaje and casillas > mejor_casillas):
+            mejor, mejor_puntaje, mejor_casillas = c, puntaje, casillas
+    print("Mayoría:", mejor, "| casillas:", mejor_casillas, "| puntaje neto:", mejor_puntaje)
+    return mejor
+
+def reservar_mayoria():
+    """Calcula el color mayoría UNA vez y lo quita de colores, para que el lado rojo
+    (resolver_lecturas) no gaste bloques de ese color: si lo pide, color_menos_agarrado lo reemplaza.
+    Se llama al empezar resolver_izquierda/resolver_derecha (sin importar cuál lado va primero)."""
+    global color_mayoria
+    if color_mayoria is None:
+        color_mayoria = sacar_mayoria(izquierda, derecha, lado_rojo)
+        if color_mayoria is not None:
+            colores[color_mayoria] = 0   # los 6 bloques quedan reservados para el lado mayoría
+    return color_mayoria
 
 
 # ---------------------------------------------------------
@@ -309,6 +435,7 @@ async def dejar_bloques(heading):
 
 
 async def Ruta_1_Lectura(): # --> RUTA EN LISTA #Se acomoda de la salida y sigue linea hasta interseccion para llegar a leer, la distancia de montaje debe ser para que quede en el centro de la linea, gire se tire hacia atras y choque con el mosaico. Ahi ya hace la lectura
+    global izquierda, derecha, lado_rojo
     #await avance(0, 100, 80)
     #await giro(90)
 
@@ -325,6 +452,12 @@ async def Ruta_1_Lectura(): # --> RUTA EN LISTA #Se acomoda de la salida y sigue
     await giro(-179,80)
     await retrocede_hasta_pared(180, distancia_max=1000, dc=50)
     reset_heading_seguro(180)
+    #await lectura_camara()
+    # Lectura MANUAL (mientras no se usa la cámara): poner los valores reales del tapete
+    izquierda = [1, 1, 2, 5, 3, 4]   # orden: fila1 + fila3 + fila2, igual que leer_camara
+    derecha   = [1, 1, 2, 3, 4, 3]
+    lado_rojo = 0                    # NÚMERO, no lista: 0 = el 5 está en izquierda, 1 = en derecha
+    reservar_mayoria()               # siempre DESPUÉS de dar los valores
 
 async def Ruta_2_Recoger_y_llevar_cemento():      # --> RUTA EN LISTA
     await avance(180, 150, 80)
@@ -368,10 +501,22 @@ async def Ruta_3_recoger_ladrillos_azules():  # --> RUTA EN LISTA
     await giro_pivot(90, pivote_izquierdo= False)
     await avance(90, 35)
     await giro(0)
-    
     await bajar_elevador()
-    
+
+async def Ruta_4_resolver_izquierda() :
+    global lectura, posicion_actual, lado_posicion_actual, llevadas
+    posicion_actual = 0                      # OJO: solo si el robot de verdad está en la línea 0
+    lado_posicion_actual = 0
+    if lado_rojo == 0:
+        lectura = list(izquierda)            # copia: resolver_lecturas cambia los colores sin bloques
+        llevadas = 0
+        await resolver_lecturas()
+    else:
+        await agarrar_mayoria(color_mayoria)
+    await llevar_a_mosaico_izquierda()
+
 async def Ruta_5_dejar_bloques_y_azules():
+    global lectura, posicion_actual, lado_posicion_actual, llevadas
     await seguir_linea_hasta_interseccion ("centro", 300)
     await multitask(subir_elevador(), avance_hasta_pared(90, 40))
     reset_heading_seguro(90)
@@ -381,8 +526,29 @@ async def Ruta_5_dejar_bloques_y_azules():
     await multitask(retrocede(-90, 170,60), abrir_paletas())
     await avance(-90, 150)
     await multitask(cerrar_paletas(), seguir_linea_hasta_interseccion("centro"))
+    await giro(90)
+    await seguir_linea_hasta_interseccion("izquierda",300,montarse=True,distancia_montaje=MONTAJE_SIN_CAMBIO)
+    posicion_actual=3
+    lado_posicion_actual=0 #izquierda posicion 3 para empezar la logica del lado derecho
 
-async def Ruta_ladrillos_verdes():
+async def Ruta_6_resolver_derecha() :
+    global lectura, posicion_actual, lado_posicion_actual, llevadas
+    reservar_mayoria()
+    if lado_rojo == 1:
+        lectura = list(derecha)              # copia: resolver_lecturas cambia los colores sin bloques
+        llevadas = 0
+        await resolver_lecturas()
+    else:
+        await agarrar_mayoria(color_mayoria)
+
+async def Ruta_7_llevar_bloques():
+    global lectura, posicion_actual, lado_posicion_actual, llevadas
+    await cerrar_garra_poquito()   # sujeta los bloques antes de que la lógica gire a 180
+    # lado_posicion_objetivo 0 = lado DERECHO (queda lado_posicion_actual = 1)
+    await logica_de_movimiento (0-posicion_actual,0 , MONTAJE_SIN_CAMBIO+20)
+    #Hacer la ruta manualmente para llevar los bloques al lado derecho
+
+async def Ruta_8_ladrillos_verdes():
     await retrocede(-90, 150, freno=False)
     await giro_arco(180, 300, freno=False, adelante=False, velocidad_mm_s=500)
     await retrocede_hasta_pared(180, 50)
@@ -415,12 +581,11 @@ async def Ruta_ladrillos_verdes():
     await retrocede(180, 190)
 
 async def Ruta_blancos():
+    #No se sabe si se va a usar o no, hay que ver si alcanza el tiempo
     await avance(180, 300, freno=False)
     await avance_hasta_linea(180)
     await giro(90)
     await seguir_linea_distancia(1200, freno=False)
-
-
     await seguir_linea_hasta_interseccion("centro", vel_crucero_mm_s=450)
     await giro_pivot(145, pivote_izquierdo=False)
     await giro_pivot(90, pivote_izquierdo=True)
@@ -463,8 +628,8 @@ async def Ruta_prueba_logica():
         pos_vacio += 1          # posición distinta a la del rojo
     lectura[pos_vacio] = color_vacio
     print("Lectura aleatoria:", lectura, "| color con 0 bloques:", color_vacio)
-    # lectura = [4, 5, 2, 3, 3, 2 ]   # Lectura fija, descomentar para repetir un caso concreto
 
+    #lectura = [1, 1, 1, 5, 3, 4]   # Lectura fija, descomentar para repetir un caso concreto
     colores = {1: 6, 2: 6, 3: 6, 4: 6}   # Reinicia la cantidad de bloques por color
     colores[color_vacio] = 0             # Comentar esta línea si usas la lectura fija
     posicion_actual = 0                  # 0 = línea de abajo (inicio)
@@ -472,6 +637,41 @@ async def Ruta_prueba_logica():
     llevadas = 0
 
     await resolver_lecturas()
+
+# ---------------------------------------------------------
+# RUTA DE PRUEBA DE AGARRAR MAYORÍA
+# Posición inicial: línea de abajo (0), lado izquierdo (abajo), sobre la línea vertical, mirando a 0.
+# Calcula el color mayoría con sacar_mayoria y llama agarrar_mayoria (va a la línea de ese color,
+# lado derecho, y luego tus movimientos para agarrar los 6 bloques).
+# ---------------------------------------------------------
+async def Ruta_prueba_mayoria():
+    global izquierda, derecha, lado_rojo, color_mayoria, colores, posicion_actual, lado_posicion_actual
+    hub.imu.reset_heading(0)
+
+    # Lectura ficticia ALEATORIA: un lado al azar tiene el rojo, el otro solo colores 1-4
+    ax, ay, az = hub.imu.acceleration()
+    seed(int(abs(ax) * 1000 + abs(ay) * 100 + abs(az) * 10) + hub.battery.voltage() + hub.battery.current())
+    izquierda = [randint(1, 4) for _ in range(6)]
+    derecha   = [randint(1, 4) for _ in range(6)]
+    lado_rojo = randint(0, 1)
+    if lado_rojo == 0:
+        izquierda[randint(0, 5)] = 5
+    else:
+        derecha[randint(0, 5)] = 5
+    # Lectura fija, descomentar para repetir un caso concreto:
+    # izquierda, derecha, lado_rojo = [1, 1, 2, 5, 3, 4], [1, 1, 2, 3, 4, 3], 0   # -> mayoría 3 (verde)
+    print("Izquierda:", izquierda, "| Derecha:", derecha, "| lado_rojo:", lado_rojo)
+
+    colores = {1: 6, 2: 6, 3: 6, 4: 6}   # Reinicia la cantidad de bloques por color
+    color_mayoria = None                 # para que reservar_mayoria lo calcule de nuevo
+    reservar_mayoria()
+    # color_mayoria = 3                  # Descomentar para forzar un color concreto (1-4)
+
+    posicion_actual = 0                  # 0 = línea de abajo (inicio)
+    lado_posicion_actual = 0             # 0 = lado izquierdo (abajo)
+
+    await agarrar_mayoria(color_mayoria)
+    print("Fin prueba mayoría | color:", color_mayoria, "| posicion:", posicion_actual, "| lado:", lado_posicion_actual)
 
 # ---------------------------------------------------------
 # PRUEBA DEL SEGUIDOR CON REGISTRO DE DATOS
@@ -518,19 +718,25 @@ async def Run():
     await hub.speaker.beep(1500, 50)   # beep de "giroscopio listo"
     await boton()
     await advertencia_bateria(boton)   # antes recibía None y fallaba si la batería estaba fuera de rango
-    #await Ruta_blancos()
-    #await Ruta_ladrillos_verdes()
-    #await prueba_motores()
-    #await boton()
+    # ---------------- RUTAS DE COMPETICIÓN (en orden) ----------------
     # await Ruta_1_Lectura()
     # await Ruta_2_Recoger_y_llevar_cemento()
     # await Ruta_3_recoger_ladrillos_azules()
-    # await cerrar_paletas()
-    await Ruta_prueba_logica()
+    # await Ruta_4_resolver_izquierda()
     # await Ruta_5_dejar_bloques_y_azules()
-    #await medir_trayectos_manual()  # Mide los trayectos y los guarda en la memoria del hub
-    #await Ruta_prueba_logica()
+    # await Ruta_6_resolver_derecha()
+    # await Ruta_7_llevar_bloques()
+    # await Ruta_8_ladrillos_verdes()
+    #await Ruta_blancos()             # No se sabe si se va a usar, hay que ver si alcanza el tiempo
+
+    # ---------------- PRUEBAS (descomentar una y comentar las rutas de arriba) ----------------
+    await subir_elevador_todo()
+    await bajar_elevador()           # antes de Ruta_prueba_logica
+    #await Ruta_prueba_logica()       # Lógica con lectura aleatoria desde la línea 0, lado izquierdo
+    await Ruta_prueba_mayoria()      # Prueba de agarrar_mayoria desde la línea 0, lado izquierdo
     #await Ruta_prueba_seguidor()     # Prueba del seguidor con registro: imprime un resumen al final
+    #await medir_trayectos_manual()   # Mide los trayectos y los guarda en la memoria del hub
+    #await prueba_motores()           # OJO: bucle infinito
 
 iniciar_esp32()   # debe ir ANTES de run_task
 #race=True: el programa termina cuando Run() termina (proceso_esp32 corre para siempre)

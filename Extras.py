@@ -1,7 +1,13 @@
 from pybricks.parameters import Button
 from pybricks.tools import wait, StopWatch
 import math
-from GyroMovement import hub, left_motor, right_motor
+from Robot_specs import get_robot
+# Se toma el hub de Robot_specs (misma instancia) y NO de GyroMovement,
+# porque GyroMovement importa Extras (import circular)
+_robot = get_robot()
+hub = _robot.hub
+left_motor = _robot.left_motor
+right_motor = _robot.right_motor
 
 async def sonido_advertencia():
     hub.speaker.volume(100)

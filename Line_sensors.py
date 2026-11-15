@@ -391,6 +391,88 @@ async def avance_hasta_linea(target_heading, distancia_ignorar=0, umbral_negro=U
     await wait(60)
 
 
+async def retrocede_hasta_linea(target_heading, distancia_ignorar=0, umbral_negro=UMBRAL_NEGRO, umbral_blanco=UMBRAL_BLANCO, montarse=False, distancia_montaje=50, min_sensores_linea=2, max_dc=60.0, kp=3.5, kd=0.18, esperar_blanco=True, distancia_max=None):
+    """Igual que avance_hasta_linea pero RETROCEDIENDO (mismos parámetros y misma detección).
+    - target_heading: rumbo que mantiene con el giroscopio (el robot mira hacia ahí y va de reversa).
+    - distancia_ignorar: mm iniciales en los que no busca la línea (ej. la línea de donde sale).
+    - esperar_blanco=True: primero espera ver blanco y luego negro (no se detiene en la línea donde ya está).
+      esperar_blanco=False: busca el negro desde el inicio.
+    - montarse=True: al detectarla sigue RETROCEDIENDO distancia_montaje (pasa la línea hacia atrás).
+    - distancia_max: mm máximos (contando distancia_ignorar); None = sin límite. Si llega sin ver la
+      línea, frena y devuelve False.
+    Devuelve True si encontró la línea.
+    Calibrar: max_dc (más bajo = detecta en un punto más exacto)."""
+    left_motor.reset_angle(0)
+    right_motor.reset_angle(0)
+
+    DIAMETRO_RUEDA = 63.0
+    FACTOR_CONVERSION = (DIAMETRO_RUEDA * 3.141) / 360.0
+    dc_base = -abs(max_dc)   # reversa
+
+    error_previo = ((target_heading - hub.imu.heading() + 180) % 360) - 180
+    derivada_filtrada = 0.0
+    ALFA_FILTRO = 0.35
+    cronometro_lazo = StopWatch()
+    cronometro_lazo.reset()
+
+    estado_busqueda = 0 if esperar_blanco else 1
+    lecturas_consecutivas = 0
+    encontrada = False
+
+    while True:
+        recorrido = ((abs(left_motor.angle()) + abs(right_motor.angle())) / 2.0) * FACTOR_CONVERSION
+        if distancia_max is not None and recorrido >= distancia_max:
+            print("retrocede_hasta_linea: no encontro la linea en", distancia_max, "mm")
+            break
+
+        dt = cronometro_lazo.time() / 1000.0
+        cronometro_lazo.reset()
+        if dt <= 0.005: dt = 0.01
+
+        if recorrido >= distancia_ignorar:
+            await sensor_mbc.actualizar_lectura()
+            valores = sensor_mbc.valores_individuales
+
+            if estado_busqueda == 0:
+                sensores_blancos = sum(1 for v in valores if v >= umbral_blanco)
+                if sensores_blancos >= min_sensores_linea:
+                    lecturas_consecutivas += 1
+                    if lecturas_consecutivas >= 2:
+                        estado_busqueda = 1
+                        lecturas_consecutivas = 0
+                else:
+                    lecturas_consecutivas = 0
+
+            elif estado_busqueda == 1:
+                sensores_negros = sum(1 for v in valores if v <= umbral_negro)
+                if sensores_negros >= min_sensores_linea:
+                    lecturas_consecutivas += 1
+                    if lecturas_consecutivas >= 2:
+                        encontrada = True
+                        if montarse:
+                            await _montaje_pid(target_heading, distancia_montaje, max_dc, kp, kd, sentido=-1)
+                        break
+                else:
+                    lecturas_consecutivas = 0
+
+        error_ang = ((target_heading - hub.imu.heading() + 180) % 360) - 180
+        derivada_cruda = (error_ang - error_previo) / dt
+        derivada_filtrada = (derivada_filtrada * (1.0 - ALFA_FILTRO)) + (derivada_cruda * ALFA_FILTRO)
+        correccion = (kp * error_ang) + (kd * derivada_filtrada)
+
+        # Mismo signo de corrección al avanzar y al retroceder (igual que _montaje_pid)
+        left_motor.dc(max(min(dc_base + correccion, 100.0), -100.0))
+        right_motor.dc(max(min(dc_base - correccion, 100.0), -100.0))
+
+        error_previo = error_ang
+        await wait(10)
+
+    left_motor.hold()
+    right_motor.hold()
+    await wait(60)
+    return encontrada
+
+
 # =============================================================================
 # REGISTRO DE DATOS DEL SEGUIDOR (para analizar y calibrar)
 # Guarda las muestras en memoria durante el recorrido (imprimir en cada ciclo lo haría más lento
