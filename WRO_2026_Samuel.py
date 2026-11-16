@@ -49,10 +49,14 @@ DC_CAMBIO_LADO = 60           # Calibrar: potencia del avance de cambio de lado
 # LÓGICA DE RECOLECCIÓN (giro a -90, avance recto, agarrar, retroceder lo mismo)
 # =============================================================================
 DISTANCIA_PRIMERA_FILA = 94  # Calibrar: mm a -90 desde la línea vertical hasta agarrar un bloque de la 1ª fila
-PASO_COLUMNA = 40            # Calibrar: mm extra por cada fila de bloques más al fondo
+PASO_COLUMNA = 45            # Calibrar: mm extra por cada fila de bloques más al fondo
 DC_RECOLECCION = 55           # Calibrar: potencia MÁXIMA del avance a -90 (al llegar al bloque igual baja a min_dc=30 por la rampa de frenado de avance)
 DC_RETROCESO_RECOLECCION = 85 # Calibrar: potencia del retroceso con el bloque (si el bloque se suelta al arrancar, bajarla)
 RETROCESO_AGARRE = 120        # Calibrar: mm EXTRA de retroceso cuando lo que sigue es agarrar (logica_de_comer)
+# Filas 2 y 3: avanza a -90 hasta quedar a 1 bloque y el último tramo lo hace en diagonal
+HEADING_DIAGONAL_DERECHA = -85   # Calibrar: rumbo del último tramo si el robot está del lado DERECHO de la línea
+HEADING_DIAGONAL_IZQUIERDA = -95 # Calibrar: rumbo del último tramo si el robot está del lado IZQUIERDO de la línea
+PASO_DIAGONAL = PASO_COLUMNA     # Calibrar: mm del tramo en diagonal (en diagonal puede necesitar un poco más que PASO_COLUMNA)
 
 # =============================================================================
 # LLEVAR A MOSAICO IZQUIERDA (antes: descarga con llevadas == 2)
@@ -109,11 +113,23 @@ async def logica_de_recoleccion(sigue_agarrar=False, fila=None):
         avanzar =(6 - colores[lectura[i]]) // 2 #Calcula cuantas filas de bloques hay que avanzar para llegar al bloque objetivo
     else:
         avanzar = fila
-    distancia = DISTANCIA_PRIMERA_FILA + PASO_COLUMNA * avanzar   #Calibrar: PASO_COLUMNA = distancia entre filas de bloques
-    await multitask(avance(-90, distancia, DC_RECOLECCION), abrir_garra())
-    await cerrar_garra_poquito()
     extra = RETROCESO_AGARRE if (sigue_agarrar and posicion_actual != 4) else 0
-    await retrocede(-90, distancia + extra-10, max_dc=DC_RETROCESO_RECOLECCION, accel_mm=80) # Mismo valor que avanzó: vuelve a la línea vertical (+ extra si sigue agarrar)
+    if avanzar == 0:
+        # 1ª fila: todo recto a -90
+        distancia = DISTANCIA_PRIMERA_FILA
+        await multitask(avance(-90, distancia, DC_RECOLECCION), abrir_garra())
+        await cerrar_garra_poquito()
+        await retrocede(-90, distancia + extra, max_dc=DC_RETROCESO_RECOLECCION, accel_mm=80) # Mismo valor que avanzó: vuelve a la línea vertical (+ extra si sigue agarrar)
+    else:
+        # 2ª y 3ª fila: recto a -90 hasta quedar a 1 bloque, y el último tramo en diagonal
+        # (-85 desde el lado derecho, -95 desde el izquierdo). El retroceso deshace los dos tramos al revés.
+        heading_diagonal = HEADING_DIAGONAL_DERECHA if lado_posicion_actual == 1 else HEADING_DIAGONAL_IZQUIERDA
+        distancia_recta = DISTANCIA_PRIMERA_FILA + PASO_COLUMNA * (avanzar - 1)   #Calibrar: PASO_COLUMNA = distancia entre filas de bloques
+        await multitask(avance(-90, distancia_recta, DC_RECOLECCION, freno=False), abrir_garra())
+        await avance(heading_diagonal, PASO_DIAGONAL, DC_RECOLECCION, rampa_inicio=False)
+        await cerrar_garra_poquito()
+        await retrocede(heading_diagonal, PASO_DIAGONAL, max_dc=DC_RETROCESO_RECOLECCION, accel_mm=80, freno=False)
+        await retrocede(-90, distancia_recta + extra, max_dc=DC_RETROCESO_RECOLECCION, rampa_inicio=False) # vuelve a la línea vertical (+ extra si sigue agarrar)
     if fila is None:
         colores[lectura[i]] -= 1 #Resta uno a la cantidad de bloques del color objetivo
 
@@ -134,7 +150,7 @@ async def logica_de_movimiento(objetivo, lado_posicion_objetivo, distancia_monta
         await retrocede_hasta_pared(179, 50)                    # Calibrar dc
         reset_heading_seguro(180)
         montaje = (MONTAJE_SIN_CAMBIO if distancia_montaje is None else distancia_montaje) + montaje_extra
-        await avance_hasta_linea(180, esperar_blanco=False, montarse=True, distancia_montaje=montaje, max_dc=60)   # Calibrar max_dc
+        await avance_hasta_linea(180, esperar_blanco=False, montarse=True, distancia_montaje=montaje, max_dc=40)   # Calibrar max_dc
         heading_objetivo = 180
         posicion_actual = 4
         lado_posicion_actual = 1
@@ -298,7 +314,7 @@ async def re_referenciar_lado(lado_posicion_objetivo):
         await boton()
     # Igual que montarse_final en logica_de_movimiento
     montarse_final = (lado_posicion_objetivo == 0 and heading_ref == 0) or (lado_posicion_objetivo != 0 and heading_ref == 180)
-    await avance_preciso(DISTANCIA_MONTAJE+10 if montarse_final else MONTAJE_SIN_CAMBIO-10, vel_mm_s=VEL_AJUSTE_DESCARGA)   # Calibrar
+    await avance_preciso(DISTANCIA_MONTAJE if montarse_final else MONTAJE_SIN_CAMBIO-10, vel_mm_s=VEL_AJUSTE_DESCARGA)   # Calibrar
     heading_objetivo = heading_ref
     lado_posicion_actual = 1 if lado_posicion_objetivo == 0 else 0
 
@@ -379,7 +395,6 @@ async def agarrar_mayoria(color_mayoria):
     await bajar_elevador()
     await multitask (retrocede(-90,360,50),bajar_elevador())
   
-
 def sacar_mayoria(izquierda, derecha, lado_rojo_idx=None):
     """Elige el color (1-4) para el lado que se llena por MAYORÍA (el lado SIN rojo).
     El lado mayoría usa los 6 bloques del color elegido, así que ese color ya no queda para
@@ -430,22 +445,24 @@ def reservar_mayoria():
 # ---------------------------------------------------------
 async def dejar_bloques(heading):
     #agarrarlos)
-    await multitask (abrir_garra(),seguir_linea_distancia (distancia_mm=90, vel_crucero_mm_s=120))
+    await multitask (abrir_garra(),seguir_linea_distancia (distancia_mm=90, vel_crucero_mm_s=200))
     await retrocede(heading,20,40)
-    await cerrar_garra()
-    await multitask (subir_elevador_todo(), seguir_linea_hasta_interseccion ( vel_crucero_mm_s=120) )#Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
-    reset_heading_seguro(heading)
-    await giro(heading+5,30)
-    await giro(heading-5,30)
-    await retrocede (heading,23)
-    await giro(heading+7,30)
-    await giro(heading-7,30)
-    await retrocede (heading,185,50)
-    await bajar_elevador()
-    await abrir_garra()
-    await motor_dc_por_segundos(motorElevador,300,-100)
     await cerrar_garra_poquito()
-    await seguir_linea_distancia(150,100)
+    await multitask (subir_elevador_todo(), seguir_linea_hasta_interseccion ( vel_crucero_mm_s=200) )#Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
+    reset_heading_seguro(heading)
+    # await giro(heading+5,30)
+    # await giro(heading-5,30)
+    # await retrocede (heading,23)
+    # await giro(heading+7,30)
+    # await giro(heading-7,30)
+    await retrocede (heading,80,50)
+    # await bajar_elevador()
+    # await abrir_garra()
+    # await motor_dc_por_segundos(motorElevador,300,-100)
+    # await cerrar_garra_poquito()
+    # await seguir_linea_distancia(150,100)
+    await bajar_elevador()
+    await motor_dc_por_segundos(motorElevador,300,-100)
     await cerrar_garra()
     await wait (100)
     await subir_elevador()
@@ -663,9 +680,9 @@ async def Ruta_prueba_logica():
     lectura[pos_vacio] = color_vacio
     print("Lectura aleatoria:", lectura, "| color con 0 bloques:", color_vacio)
 
-    #lectura = [1, 1, 1, 5, 3, 4]   # Lectura fija, descomentar para repetir un caso concreto
+    lectura = [3, 5, 3, 1, 3, 4]   # Lectura fija, descomentar para repetir un caso concreto
     colores = {1: 6, 2: 6, 3: 6, 4: 6}   # Reinicia la cantidad de bloques por color
-    colores[color_vacio] = 0             # Comentar esta línea si usas la lectura fija
+    #colores[color_vacio] = 0             # Comentar esta línea si usas la lectura fija
     posicion_actual = 0                  # 0 = línea de abajo (inicio)
     lado_posicion_actual = 0             # 0 = lado izquierdo (abajo)
     llevadas = 0

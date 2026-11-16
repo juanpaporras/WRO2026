@@ -103,6 +103,11 @@ def _esta_adentro(lado, error):
         return error > 0   # la línea se movió hacia el centro/izquierda del sensor
     return False
 
+# seguir_linea_distancia a BAJA velocidad: kp se escala con vel / vel_referencia, y a 150 mm/s (ref 700)
+# quedaba en ~0.6: corregía tan poco que si arrancaba salido de la línea nunca se montaba.
+# kp nunca baja de kp * ESCALA_KP_MINIMA (kd sí sigue bajando, para que no vuelvan las oscilaciones).
+ESCALA_KP_MINIMA = 0.6   # Calibrar: más alto = se monta antes a baja velocidad; muy alto = zigzag a baja velocidad
+
 async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=700, accel_dist_mm=50, decel_dist_mm=100, vel_minima_mm_s=80, kp=3, kd=2.1, ki=0.0, freno=True, lado="centro", vel_referencia=700, factor_adentro=FACTOR_ADENTRO):
     # lado: "centro" sigue el centro de la línea; "izquierda"/"derecha" siguen ese borde
     # (mismo offset que seguir_linea_hasta_interseccion).
@@ -116,6 +121,7 @@ async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=700, accel_dist_
     alfa_filtro = 0.35
     MAX_TURN_RATE = 60.0
     dt_fijo = 0.010
+    ultimo_visto = 0.0   # error_espacial de la última lectura que SÍ vio la línea (para saber de qué lado quedó)
 
     if lado == "izquierda":
         setpoint = -7.0
@@ -140,19 +146,26 @@ async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=700, accel_dist_
             vel_lineal = vel_crucero_mm_s
             
         await sensor_mbc.actualizar_lectura()
-        error = sensor_mbc.error_espacial - setpoint
+        posicion_linea = sensor_mbc.error_espacial
+        if sensor_mbc.ancho_linea > 0:
+            ultimo_visto = posicion_linea
+        elif ultimo_visto != 0:
+            # No ve la línea: el sensor da -8 siempre (giraba siempre al mismo lado, aunque la línea
+            # estuviera del otro). Se usa el extremo del lado donde se vio por última vez.
+            posicion_linea = 8.0 if ultimo_visto > 0 else -8.0
+        error = posicion_linea - setpoint
 
         P = error
         derivada_cruda = (error - last_error) / dt_fijo
         derivada_filtrada = (derivada_filtrada * (1.0 - alfa_filtro)) + (derivada_cruda * alfa_filtro)
         D = derivada_filtrada
-        
+
         if abs(error) <= 0.2:
             error = 0.0
 
         escala_vel = vel_lineal / vel_referencia
-        kp_vel = kp * escala_vel                    # kp proporcional a la velocidad actual
-        kd_vel = kd * escala_vel                    # kd también (ver comentario arriba)
+        kp_vel = kp * max(escala_vel, ESCALA_KP_MINIMA)   # kp proporcional a la velocidad, con un mínimo
+        kd_vel = kd * escala_vel                    # kd sin mínimo (ver comentario arriba)
         if _esta_adentro(lado, error):
             kp_vel *= factor_adentro                # sale más rápido si se metió sobre la línea
         turn_rate = -((kp_vel * P) + (kd_vel * D))
@@ -631,9 +644,11 @@ async def retroceder_hasta_linea(target_heading, vel_mm_s=100, umbral=None, dist
 DISTANCIA_ENTRE_LINEAS = 155  # Calibrar: mm entre líneas de color (prueba: ~158-161); usar un poco menos para frenar a tiempo
 FRENAR_ANTES_MM = 60          # Calibrar: mm antes de la línea objetivo en que baja a vel_aproximacion (más = más seguro, más lento)
 
-ERROR_MAXIMO_VALIDO = 6  # Calibrar: si el sensor ve la línea MÁS ALLÁ de esta posición del lado CONTRARIO al borde que sigue
-                         #   (error_espacial > +6 siguiendo por la izquierda, < -6 por la derecha) es una lectura imposible
-                         #   (borde del lado opuesto): ese ciclo va con gyro.
+ERROR_MAXIMO_VALIDO = 8  # Calibrar: si el sensor ve la línea MÁS ALLÁ de esta posición del lado CONTRARIO al borde que sigue
+                         #   (error_espacial > +N siguiendo por la izquierda, < -N por la derecha) se ignora: ese ciclo va con gyro.
+                         #   error_espacial va de -8 a +8, así que 8 = DESACTIVADO (toda lectura con línea se usa para corregir;
+                         #   la línea en el extremo contrario es real y es cuando más hay que corregir). Bajar a 6-7 solo si
+                         #   aparecen giros bruscos por lecturas sueltas en el extremo contrario.
                          #   ANTES se medía como |error - setpoint| > 6: con OFFSET_SEGUIDOR = 6 eso descartaba TODA lectura con
                          #   la línea en el centro o pasada al otro lado, justo cuando más tenía que corregir, y el robot iba recto.
 

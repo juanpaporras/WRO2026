@@ -587,8 +587,8 @@ async def agarrar_izquierda():
     await bajar_elevador_grados(100, 20)   # baja un poco esquivando el cuadro; bajar_elevador lo devuelve
     await avance (-90,30,40,freno=False)
     await multitask (avance (-90,60,40),bajar_elevador())
-    await retrocede_hasta_linea(-90,max_dc=40)
-    await avance (-90,55,40)
+    await retrocede_hasta_linea(-90,max_dc=40,min_sensores_linea=7)
+    await avance (-90,50,40)
 
 async def agarrar_derecha():
     from Line_sensors import retrocede_hasta_linea   # aquí y no arriba: evita el import circular
@@ -601,5 +601,5 @@ async def agarrar_derecha():
     await bajar_elevador_grados(100, 20)   # baja un poco esquivando el cuadro; bajar_elevador lo devuelve
     await avance (-90,30,40,freno=False)
     await multitask (avance (-90,60,40),bajar_elevador())
-    await retrocede_hasta_linea(-90,max_dc=40)
-    await avance (-90,55,40)
+    await retrocede_hasta_linea(-90,max_dc=40,min_sensores_linea=7)
+    await avance (-90,50,40)
