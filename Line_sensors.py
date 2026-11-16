@@ -92,7 +92,7 @@ async def diagnostico_espectral_mbc():
 # Siguiendo un borde ("izquierda"/"derecha"), si el robot se mete sobre la línea el kp se
 # multiplica por este factor para que salga rápido y se estabilice en el borde.
 # Del lado de afuera usa el kp normal (ahí el error casi no crece y no hace falta más).
-FACTOR_ADENTRO = 2.0   # Calibrar: más alto = sale más rápido de la línea; muy alto = zigzag en el borde
+FACTOR_ADENTRO = 3.0   # Calibrar: más alto = sale más rápido de la línea; muy alto = zigzag en el borde
 
 def _esta_adentro(lado, error):
     """True si, siguiendo un borde, el robot quedó encima de la línea (lado de adentro).
@@ -106,9 +106,10 @@ def _esta_adentro(lado, error):
 async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=700, accel_dist_mm=50, decel_dist_mm=100, vel_minima_mm_s=80, kp=3, kd=2.1, ki=0.0, freno=True, lado="centro", vel_referencia=700, factor_adentro=FACTOR_ADENTRO):
     # lado: "centro" sigue el centro de la línea; "izquierda"/"derecha" siguen ese borde
     # (mismo offset que seguir_linea_hasta_interseccion).
-    # kp es el valor calibrado a vel_referencia (mm/s). En cada ciclo se escala con la
-    # velocidad actual (kp * vel / vel_referencia) para que corrija igual por milímetro a
-    # cualquier velocidad. kd NO se escala: su efecto por milímetro ya no depende de la velocidad.
+    # kp y kd son los valores calibrados a vel_referencia (mm/s). En cada ciclo los DOS se escalan
+    # con la velocidad actual (k * vel / vel_referencia). kd también se escala porque el error del
+    # sensor va a saltos enteros: cada salto da la misma derivada a cualquier velocidad, y a baja
+    # velocidad un kd fijo hacía oscilar al robot de lado a lado.
     start_dist = robot.drive_base.distance()
     last_error = 0.0
     derivada_filtrada = 0.0
@@ -149,10 +150,12 @@ async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=700, accel_dist_
         if abs(error) <= 0.2:
             error = 0.0
 
-        kp_vel = kp * vel_lineal / vel_referencia   # kp proporcional a la velocidad actual
+        escala_vel = vel_lineal / vel_referencia
+        kp_vel = kp * escala_vel                    # kp proporcional a la velocidad actual
+        kd_vel = kd * escala_vel                    # kd también (ver comentario arriba)
         if _esta_adentro(lado, error):
             kp_vel *= factor_adentro                # sale más rápido si se metió sobre la línea
-        turn_rate = -((kp_vel * P) + (kd * D))
+        turn_rate = -((kp_vel * P) + (kd_vel * D))
         turn_rate = max(min(turn_rate, MAX_TURN_RATE), -MAX_TURN_RATE)
 
         robot.drive_base.drive(vel_lineal, turn_rate)
@@ -166,10 +169,11 @@ async def seguir_linea_distancia(distancia_mm, vel_crucero_mm_s=700, accel_dist_
 
 async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, kp=6, kd=2.8, ki=0.0, umbral_interseccion=8, target_heading=None, montarse=False, distancia_montaje=20, debug=False, vel_referencia=600, factor_adentro=FACTOR_ADENTRO):
     # debug=True: imprime ancho, error del sensor y giro cada vez que el giro es brusco (>= 40 °/s)
-    # kp es el valor calibrado a vel_referencia (mm/s); se escala con vel_crucero_mm_s
-    # (kp * vel / vel_referencia) para que corrija igual por milímetro a cualquier velocidad.
-    # kd NO se escala: su efecto por milímetro ya no depende de la velocidad.
+    # kp y kd son los valores calibrados a vel_referencia (mm/s); los DOS se escalan con
+    # vel_crucero_mm_s (k * vel / vel_referencia). kd también, porque el error del sensor va a
+    # saltos enteros y un kd fijo a baja velocidad hacía oscilar al robot de lado a lado.
     kp_vel = kp * vel_crucero_mm_s / vel_referencia
+    kd_vel = kd * vel_crucero_mm_s / vel_referencia
     last_error = 0.0
     derivada_filtrada = 0.0
     alfa_filtro = 0.35
@@ -237,12 +241,12 @@ async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, k
         D = derivada_filtrada
         
         kp_uso = kp_vel * factor_adentro if _esta_adentro(lado, error) else kp_vel
-        turn_rate = -((kp_uso * P) + (kd * D))
+        turn_rate = -((kp_uso * P) + (kd_vel * D))
         turn_rate = max(min(turn_rate, MAX_TURN_RATE), -MAX_TURN_RATE)
 
         if debug and abs(turn_rate) >= 40:
             print("BRUSCO ancho", ancho_linea, "err_sensor", sensor_mbc.error_espacial,
-                  "P", kp_uso * P, "D", kd * D, "giro", turn_rate)
+                  "P", kp_uso * P, "D", kd_vel * D, "giro", turn_rate)
 
         robot.drive_base.drive(vel_crucero_mm_s, turn_rate)
         
@@ -627,7 +631,18 @@ async def retroceder_hasta_linea(target_heading, vel_mm_s=100, umbral=None, dist
 DISTANCIA_ENTRE_LINEAS = 155  # Calibrar: mm entre líneas de color (prueba: ~158-161); usar un poco menos para frenar a tiempo
 FRENAR_ANTES_MM = 60          # Calibrar: mm antes de la línea objetivo en que baja a vel_aproximacion (más = más seguro, más lento)
 
-ERROR_MAXIMO_VALIDO = 6  # Calibrar: |error - setpoint| mayor a esto es una lectura imposible (borde del lado opuesto): ese ciclo va con gyro
+ERROR_MAXIMO_VALIDO = 6  # Calibrar: si el sensor ve la línea MÁS ALLÁ de esta posición del lado CONTRARIO al borde que sigue
+                         #   (error_espacial > +6 siguiendo por la izquierda, < -6 por la derecha) es una lectura imposible
+                         #   (borde del lado opuesto): ese ciclo va con gyro.
+                         #   ANTES se medía como |error - setpoint| > 6: con OFFSET_SEGUIDOR = 6 eso descartaba TODA lectura con
+                         #   la línea en el centro o pasada al otro lado, justo cuando más tenía que corregir, y el robot iba recto.
+
+# BÚSQUEDA DE LÍNEA en seguir_linea_contando_lineas: si deja de ver la línea es porque se corrió hacia
+# los bloques (-90). En vez de seguir recto con el gyro, gira hacia el lado de 90 hasta volver a verla:
+# mirando a 0 corrige a la derecha (rumbo +ANGULO), mirando a 180 corrige a la izquierda (rumbo 180-ANGULO).
+ANGULO_BUSQUEDA_LINEA = 25   # Calibrar: grados hacia 90 con los que busca la línea (más = la encuentra antes, pero entra más torcido)
+VEL_BUSQUEDA_LINEA = 200     # Calibrar: mm/s máximos mientras busca (más lento = gira antes de avanzar mucho)
+LECTURAS_SIN_LINEA = 2       # Calibrar: lecturas seguidas sin ver la línea para empezar a buscar (filtra lecturas sueltas)
 
 async def seguir_linea_contando_lineas(lado, num_lineas, target_heading, offset=5.0, vel_crucero_mm_s=450, vel_aproximacion_mm_s=250, vel_minima_mm_s=80, accel_mm=50, distancia_ignorar=50, montarse=False, distancia_montaje=20, umbral_interseccion=UMBRAL_INTERSECCION_BORDE, kp=6, kd=2.8, vel_referencia=600, factor_adentro=FACTOR_ADENTRO, registro=None):
     """Sigue la línea vertical por un BORDE contando las líneas que la cruzan, SIN frenar en las
@@ -653,6 +668,10 @@ async def seguir_linea_contando_lineas(lado, num_lineas, target_heading, offset=
     sobre_linea = False        # True mientras está cruzando una línea (para no contarla 2 veces)
     lecturas_fuera = 0
     primer_ciclo_pd = True     # al arrancar / tras cruzar o perder la línea: sin derivada (evita el tirón)
+    lecturas_sin_linea = 0
+    # Rumbo de búsqueda: target_heading corrido ANGULO_BUSQUEDA_LINEA hacia el lado de 90 (lejos de los bloques)
+    sentido_90 = 1 if ((90 - target_heading + 180) % 360) - 180 > 0 else -1
+    heading_busqueda = target_heading + sentido_90 * ANGULO_BUSQUEDA_LINEA
 
     while True:
         recorrido = abs(robot.drive_base.distance() - inicio)
@@ -689,8 +708,18 @@ async def seguir_linea_contando_lineas(lado, num_lineas, target_heading, offset=
 
         error_yaw = ((target_heading - hub.imu.heading() + 180) % 360) - 180
         error = sensor_mbc.error_espacial - setpoint
-        lectura_rara = abs(error) > ERROR_MAXIMO_VALIDO
-        if ancho >= umbral_interseccion or ancho == 0 or lectura_rara:
+        # Solo es rara si la línea aparece muy al lado CONTRARIO del borde que sigue (setpoint < 0 -> lado contrario = positivo)
+        lado_contrario = sensor_mbc.error_espacial if setpoint < 0 else -sensor_mbc.error_espacial
+        lectura_rara = lado_contrario > ERROR_MAXIMO_VALIDO
+        lecturas_sin_linea = lecturas_sin_linea + 1 if ancho == 0 else 0
+        if lecturas_sin_linea >= LECTURAS_SIN_LINEA:
+            # Perdió la línea: se corrió hacia los bloques (-90). Gira hacia 90 hasta volver a verla.
+            error_busqueda = ((heading_busqueda - hub.imu.heading() + 180) % 360) - 180
+            turn_rate = max(min(error_busqueda * 2.5, MAX_TURN_RATE), -MAX_TURN_RATE)
+            modo = 3
+            robot.drive_base.drive(min(vel, VEL_BUSQUEDA_LINEA), turn_rate)
+            primer_ciclo_pd = True
+        elif ancho >= umbral_interseccion or ancho == 0 or lectura_rara:
             # Cruzando una línea, sin ver la línea o lectura imposible (borde del lado opuesto):
             # recto con el giroscopio ese ciclo
             turn_rate = error_yaw * 2.5

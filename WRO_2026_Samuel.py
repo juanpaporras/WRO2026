@@ -39,8 +39,8 @@ color_mayoria = None         # Color del lado mayoría (lo calcula reservar_mayo
 OFFSET_SEGUIDOR = 6           # Calibrar: offset del borde (izquierda = -5, derecha = +5)
 VEL_MOVIMIENTO = 450          # Calibrar: velocidad (mm/s) siguiendo la línea vertical
 VEL_APROX_MOVIMIENTO = 250    # Calibrar: velocidad (mm/s) desde la penúltima línea hasta la línea objetivo
-DISTANCIA_MONTAJE = 78        # Calibrar: mm que avanza después de la línea cuando tiene que pasarse al otro lado (si es mucho, luego no encuentra la línea al seguirla)
-MONTAJE_SIN_CAMBIO = 18       # Calibrar: mm que avanza después de la línea cuando NO tiene que pasarse de lado
+DISTANCIA_MONTAJE = 82        # Calibrar: mm que avanza después de la línea cuando tiene que pasarse al otro lado (si es mucho, luego no encuentra la línea al seguirla)
+MONTAJE_SIN_CAMBIO = 15       # Calibrar: mm que avanza después de la línea cuando NO tiene que pasarse de lado
 # Cambiar de lado en la MISMA línea = la diferencia entre los dos montajes (pasa de una fila a la otra)
 DISTANCIA_CAMBIO_LADO = DISTANCIA_MONTAJE - MONTAJE_SIN_CAMBIO   # Calibrar: ~60 mm
 DC_CAMBIO_LADO = 60           # Calibrar: potencia del avance de cambio de lado
@@ -48,17 +48,17 @@ DC_CAMBIO_LADO = 60           # Calibrar: potencia del avance de cambio de lado
 # =============================================================================
 # LÓGICA DE RECOLECCIÓN (giro a -90, avance recto, agarrar, retroceder lo mismo)
 # =============================================================================
-DISTANCIA_PRIMERA_FILA = 110  # Calibrar: mm a -90 desde la línea vertical hasta agarrar un bloque de la 1ª fila
-PASO_COLUMNA = 32             # Calibrar: mm extra por cada fila de bloques más al fondo
+DISTANCIA_PRIMERA_FILA = 94  # Calibrar: mm a -90 desde la línea vertical hasta agarrar un bloque de la 1ª fila
+PASO_COLUMNA = 40            # Calibrar: mm extra por cada fila de bloques más al fondo
 DC_RECOLECCION = 55           # Calibrar: potencia MÁXIMA del avance a -90 (al llegar al bloque igual baja a min_dc=30 por la rampa de frenado de avance)
 DC_RETROCESO_RECOLECCION = 85 # Calibrar: potencia del retroceso con el bloque (si el bloque se suelta al arrancar, bajarla)
-RETROCESO_AGARRE = 110        # Calibrar: mm EXTRA de retroceso cuando lo que sigue es agarrar (logica_de_comer)
+RETROCESO_AGARRE = 120        # Calibrar: mm EXTRA de retroceso cuando lo que sigue es agarrar (logica_de_comer)
 
 # =============================================================================
 # LLEVAR A MOSAICO IZQUIERDA (antes: descarga con llevadas == 2)
 # =============================================================================
 DESCARGA_AVANCE = 220         # Calibrar: del carril hasta la zona de descarga (mirando a 90); el mosaico sigue la línea DESCARGA_AVANCE + 100
-DESCARGA_UN_BLOQUE = 30       # Calibrar: mm hacia adentro (al centro, entre la línea 2 y la 3) antes de girar a 90
+DESCARGA_UN_BLOQUE = 55       # Calibrar: mm hacia adentro (al centro, entre la línea 2 y la 3) antes de girar a 90
 VEL_REFERENCIA_DESCARGA = 100 # Calibrar: mm/s al retroceder buscando la línea (más lento = detecta en un punto más exacto)
 VEL_AJUSTE_DESCARGA = 150     # Calibrar: mm/s del avance fijo después de detectar la línea
 BUSQUEDA_LINEA_MM = 90        # Calibrar: mm que re_referenciar_lado busca la línea hacia ATRÁS antes de buscarla adelante (menos que lo que falta a la línea vecina, ~155 mm entre líneas)
@@ -66,7 +66,7 @@ BUSQUEDA_LINEA_MM = 90        # Calibrar: mm que re_referenciar_lado busca la l�
 # =============================================================================
 # AGARRAR ROJO (cuadro gris arriba a la derecha, desde la posición 4 lado izquierdo)
 # =============================================================================
-ROJO_AVANCE_50 = 120          # Calibrar: mm de avance a 56° hasta que la garra quede sobre el rojo
+ROJO_AVANCE_50 = 130          # Calibrar: mm de avance a 56° hasta que la garra quede sobre el rojo
 
 # =============================================================================
 # CÁMARA
@@ -113,7 +113,7 @@ async def logica_de_recoleccion(sigue_agarrar=False, fila=None):
     await multitask(avance(-90, distancia, DC_RECOLECCION), abrir_garra())
     await cerrar_garra_poquito()
     extra = RETROCESO_AGARRE if (sigue_agarrar and posicion_actual != 4) else 0
-    await retrocede(-90, distancia + extra, max_dc=DC_RETROCESO_RECOLECCION, accel_mm=80) # Mismo valor que avanzó: vuelve a la línea vertical (+ extra si sigue agarrar)
+    await retrocede(-90, distancia + extra-10, max_dc=DC_RETROCESO_RECOLECCION, accel_mm=80) # Mismo valor que avanzó: vuelve a la línea vertical (+ extra si sigue agarrar)
     if fila is None:
         colores[lectura[i]] -= 1 #Resta uno a la cantidad de bloques del color objetivo
 
@@ -122,6 +122,23 @@ async def logica_de_movimiento(objetivo, lado_posicion_objetivo, distancia_monta
     # Si se da un valor, se monta exactamente esa distancia.
     # montaje_extra: mm que se SUMAN al montaje (ej. descarga con llevadas == 2).
     global heading_objetivo, lado_posicion_actual, posicion_actual
+    # CASO ESPECIAL: 4 por la DERECHA (lado_posicion_objetivo == 0). No se llega siguiendo la línea:
+    # va a 4 por la izquierda, gira a 180, retrocede hasta la pared, resetea el heading a 180,
+    # avanza hasta la línea y se monta MONTAJE_SIN_CAMBIO (queda del lado de la pared = derecha).
+    ya_en_4_derecha = (objetivo == 0 and posicion_actual == 4 and lado_posicion_actual == 1)
+    if posicion_actual + objetivo == 4 and lado_posicion_objetivo == 0 and not ya_en_4_derecha:
+        if not (objetivo == 0 and lado_posicion_actual == 0):   # si ya está en 4 izquierda, no se mueve
+            await logica_de_movimiento(objetivo, 1)             # 4 por la izquierda (1 != 0 = izquierda)
+        await cerrar_garra_poquito()
+        await giro(179)
+        await retrocede_hasta_pared(179, 50)                    # Calibrar dc
+        reset_heading_seguro(180)
+        montaje = (MONTAJE_SIN_CAMBIO if distancia_montaje is None else distancia_montaje) + montaje_extra
+        await avance_hasta_linea(180, esperar_blanco=False, montarse=True, distancia_montaje=montaje, max_dc=60)   # Calibrar max_dc
+        heading_objetivo = 180
+        posicion_actual = 4
+        lado_posicion_actual = 1
+        return
     # Se mueve SIGUIENDO la línea vertical por un costado y contando las líneas de color:
     # mirando a 0 por la izquierda (offset -5), mirando a 180 por la derecha (offset +5).
     movimiento = abs(objetivo)
@@ -206,12 +223,7 @@ async def llevar_a_mosaico_izquierda():
 
     # 3) Hacia el mosaico
     await giro(90, 80)
-    await seguir_linea_distancia (distancia_mm=DESCARGA_AVANCE, vel_crucero_mm_s=100) #Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
-    await subir_elevador_todo()
-    await retrocede (90,150,50)
-    await bajar_elevador()
-    await avance (90,100,50)
-    await cerrar_garra()
+    await avance(90,30,40)
 
 async def logica_de_comer():
     """Cada 2 bloques el robot se los "come" (sin ir a descargar ni usar la logica de movimiento).
@@ -222,7 +234,10 @@ async def logica_de_comer():
         await cerrar_garra_poquito()
         await giro(-90)
         await retrocede(-90, RETROCESO_AGARRE, max_dc=DC_RETROCESO_RECOLECCION, accel_mm=80)  # el mismo retroceso extra que en logica_de_recoleccion
-
+    else:
+        await multitask(avance(-90,60,40),abrir_garra())
+        await cerrar_garra_poquito()
+        await retrocede(-90,60,40)
     if llevadas == 0:
         await agarrar_izquierda()
     elif llevadas == 1:
@@ -280,9 +295,10 @@ async def re_referenciar_lado(lado_posicion_objetivo):
         encontrada = await retroceder_hasta_linea(heading_ref, vel_mm_s=-VEL_REFERENCIA_DESCARGA, distancia_max=2 * BUSQUEDA_LINEA_MM)
     if not encontrada:
         print("re_referenciar_lado: NO encontró la línea en ningún sentido (¿robot muy corrido?)")
+        await boton()
     # Igual que montarse_final en logica_de_movimiento
     montarse_final = (lado_posicion_objetivo == 0 and heading_ref == 0) or (lado_posicion_objetivo != 0 and heading_ref == 180)
-    await avance_preciso(DISTANCIA_MONTAJE if montarse_final else MONTAJE_SIN_CAMBIO, vel_mm_s=VEL_AJUSTE_DESCARGA)   # Calibrar
+    await avance_preciso(DISTANCIA_MONTAJE+10 if montarse_final else MONTAJE_SIN_CAMBIO-10, vel_mm_s=VEL_AJUSTE_DESCARGA)   # Calibrar
     heading_objetivo = heading_ref
     lado_posicion_actual = 1 if lado_posicion_objetivo == 0 else 0
 
@@ -412,7 +428,30 @@ def reservar_mayoria():
 # ---------------------------------------------------------
 # RUTINAS LOCALES DE DESCARGA 
 # ---------------------------------------------------------
-async def dejar_bloques(heading):   
+async def dejar_bloques(heading):
+    #agarrarlos)
+    await multitask (abrir_garra(),seguir_linea_distancia (distancia_mm=90, vel_crucero_mm_s=120))
+    await retrocede(heading,20,40)
+    await cerrar_garra()
+    await multitask (subir_elevador_todo(), seguir_linea_hasta_interseccion ( vel_crucero_mm_s=120) )#Calibrar para que el robot avance hasta la línea de descarga y se monte sobre ella
+    reset_heading_seguro(heading)
+    await giro(heading+5,30)
+    await giro(heading-5,30)
+    await retrocede (heading,23)
+    await giro(heading+7,30)
+    await giro(heading-7,30)
+    await retrocede (heading,185,50)
+    await bajar_elevador()
+    await abrir_garra()
+    await motor_dc_por_segundos(motorElevador,300,-100)
+    await cerrar_garra_poquito()
+    await seguir_linea_distancia(150,100)
+    await cerrar_garra()
+    await wait (100)
+    await subir_elevador()
+    await seguir_linea_hasta_interseccion(vel_crucero_mm_s=200)
+    await avance_hasta_pared(heading,40)
+    #soltarlos
     await motor_dc_por_grados(motorElevador, 140, -100)
     await abrir_garra()
     await motor_dc_por_grados (motorgarra,9,80)
@@ -424,10 +463,8 @@ async def dejar_bloques(heading):
     await motor_dc_por_grados (motorgarra,9,80)
     await retrocede (heading,4,50)
     await multitask (cerrar_garra_poquito(),motor_dc_por_segundos(motorElevador, 100, -50))
-    await retrocede (heading,3,50)
     await abrir_garra()
     await motor_dc_por_grados (motorgarra,9,80)
-
 
 # ---------------------------------------------------------
 # RUTAS DE COMPETICIÓN 
@@ -441,7 +478,7 @@ async def Ruta_1_Lectura(): # --> RUTA EN LISTA #Se acomoda de la salida y sigue
 
     #await avance(0, 15, 80, freno=False)
     #await giro_pivot(90, pivote_izquierdo=False)
-
+    await subir_elevador_todo()
     await multitask(giro_arco(90, 90, freno=False), subir_cuadro(), cerrar_paletas())
     await avance(90, 200, 80,freno=False)
     await seguir_linea_distancia(distancia_mm=500, vel_crucero_mm_s=700)
@@ -454,8 +491,8 @@ async def Ruta_1_Lectura(): # --> RUTA EN LISTA #Se acomoda de la salida y sigue
     reset_heading_seguro(180)
     #await lectura_camara()
     # Lectura MANUAL (mientras no se usa la cámara): poner los valores reales del tapete
-    izquierda = [1, 1, 2, 5, 3, 4]   # orden: fila1 + fila3 + fila2, igual que leer_camara
-    derecha   = [1, 1, 2, 3, 4, 3]
+    izquierda = [2, 2, 3, 5, 4, 1]   # orden: fila1 + fila3 + fila2, igual que leer_camara
+    derecha   = [4, 4, 3, 2, 1, 2]
     lado_rojo = 0                    # NÚMERO, no lista: 0 = el 5 está en izquierda, 1 = en derecha
     reservar_mayoria()               # siempre DESPUÉS de dar los valores
 
@@ -499,7 +536,7 @@ async def Ruta_3_recoger_ladrillos_azules():  # --> RUTA EN LISTA
     await giro_pivot(67.5, pivote_izquierdo= False)
     await subir_cuadro()
     await giro_pivot(90, pivote_izquierdo= False)
-    await avance(90, 35)
+    await avance(90, 50)
     await giro(0)
     await bajar_elevador()
 
@@ -517,9 +554,6 @@ async def Ruta_4_resolver_izquierda() :
 
 async def Ruta_5_dejar_bloques_y_azules():
     global lectura, posicion_actual, lado_posicion_actual, llevadas
-    await seguir_linea_hasta_interseccion ("centro", 300)
-    await multitask(subir_elevador(), avance_hasta_pared(90, 40))
-    reset_heading_seguro(90)
     await dejar_bloques(90)
     await retrocede(90,150)
     await giro(-90)
@@ -730,10 +764,13 @@ async def Run():
     #await Ruta_blancos()             # No se sabe si se va a usar, hay que ver si alcanza el tiempo
 
     # ---------------- PRUEBAS (descomentar una y comentar las rutas de arriba) ----------------
+    await bajar_elevador()
     await subir_elevador_todo()
-    await bajar_elevador()           # antes de Ruta_prueba_logica
-    #await Ruta_prueba_logica()       # Lógica con lectura aleatoria desde la línea 0, lado izquierdo
-    await Ruta_prueba_mayoria()      # Prueba de agarrar_mayoria desde la línea 0, lado izquierdo
+    await bajar_elevador()  
+    await Ruta_prueba_logica()       # Lógica con lectura aleatoria desde la línea 0, lado izquierdo
+    await llevar_a_mosaico_izquierda()
+    await dejar_bloques(90)
+    # await Ruta_prueba_mayoria()      # Prueba de agarrar_mayoria desde la línea 0, lado izquierdo
     #await Ruta_prueba_seguidor()     # Prueba del seguidor con registro: imprime un resumen al final
     #await medir_trayectos_manual()   # Mide los trayectos y los guarda en la memoria del hub
     #await prueba_motores()           # OJO: bucle infinito

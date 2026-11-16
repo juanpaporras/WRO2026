@@ -1,7 +1,7 @@
 from Robot_specs import get_robot
 from pybricks.tools import wait, StopWatch,multitask
 # motorElevador se IMPORTA de Actuators: un puerto solo se puede abrir una vez (Motor(Port.E) dos veces = EBUSY)
-from Actuators import subir_elevador_todo, bajar_elevador, abrir_garra,subir_elevador, cerrar_garra_poquito,motor_dc_por_grados, motorElevador,mover_cuadro,CUADRO_ESQUIVA,CUADRO_ARRIBA
+from Actuators import subir_elevador_todo, bajar_elevador, abrir_garra,subir_elevador, cerrar_garra_poquito,motor_dc_por_grados, motorElevador,mover_cuadro,CUADRO_ESQUIVA,CUADRO_ARRIBA,bajar_elevador_poquito,GRADOS_ELEVADOR_POQUITO,bajar_elevador_grados
 from Extras import boton
 # OJO: Line_sensors NO se importa aquí arriba (Line_sensors importa hub de este archivo -> import circular).
 # Se importa DENTRO de las funciones que lo usan (agarrar_izquierda / agarrar_derecha).
@@ -577,25 +577,29 @@ DC_PIVOT_COMER = 60          # Calibrar: potencia máxima de los giro_pivot al c
 DC_ELEVADOR_COMER = 75       # Calibrar: potencia de subir_elevador_todo al comer (antes 100); si no llega arriba, subir
 
 async def agarrar_izquierda():
-    # Calibrar: PENDIENTE - movimientos del mecanismo para guardar los 2 bloques del lado izquierdo
     from Line_sensors import retrocede_hasta_linea   # aquí y no arriba: evita el import circular
-    await giro_pivot (-130,False,70)
-    await multitask (abrir_garra(),subir_elevador())
-    await giro (-115,60)
+    await giro (-115)
+    await multitask (abrir_garra(),motor_dc_por_grados(motorElevador, 110, 100))
+    await giro_pivot (-90,True,60)
+    await motor_dc_por_grados(motorElevador, GRADOS_ELEVADOR_POQUITO-110, 100)
     await subir_elevador_todo()
-    await giro_pivot (-90,False,60)
-    await avance (-90,50,40,freno=False)
-    await multitask (avance (-90,110,40),bajar_elevador())
+    await avance (-90,70,40,freno=True)
+    await bajar_elevador_grados(100, 20)   # baja un poco esquivando el cuadro; bajar_elevador lo devuelve
+    await avance (-90,30,40,freno=False)
+    await multitask (avance (-90,60,40),bajar_elevador())
     await retrocede_hasta_linea(-90,max_dc=40)
-    await avance (-90,53,40)
+    await avance (-90,55,40)
+
 async def agarrar_derecha():
     from Line_sensors import retrocede_hasta_linea   # aquí y no arriba: evita el import circular
-    await giro_pivot (-50,True,70)
-    await multitask (abrir_garra(),subir_elevador())
-    await giro (-65,60)
+    await giro (-65)
+    await multitask (abrir_garra(),motor_dc_por_grados(motorElevador, 110, 100))
+    await giro_pivot (-90,False,60)
+    await motor_dc_por_grados(motorElevador, GRADOS_ELEVADOR_POQUITO-110, 100)
     await subir_elevador_todo()
-    await giro_pivot (-90,True,60)
-    await avance (-90,50,40,freno=False)
-    await multitask (avance (-90,110,40),bajar_elevador())
+    await avance (-90,70,40,freno=True)
+    await bajar_elevador_grados(100, 20)   # baja un poco esquivando el cuadro; bajar_elevador lo devuelve
+    await avance (-90,30,40,freno=False)
+    await multitask (avance (-90,60,40),bajar_elevador())
     await retrocede_hasta_linea(-90,max_dc=40)
-    await avance (-90,53,40)
+    await avance (-90,55,40)
