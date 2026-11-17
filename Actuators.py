@@ -206,9 +206,9 @@ GARRA_TIEMPO_TOPE_MS = 150  # Calibrar: tiempo seguido frenada para confirmar el
 GARRA_ARRANQUE_MS = 250     # Calibrar: tiempo inicial en que no se revisa el tope (la garra parte cerrada/apretada)
 GARRA_TIEMPO_MAX_MS = 1500  # Seguridad: corta siempre después de esto
 
-async def abrir_garra():
+async def abrir_garra(potencia=-100):
     # Abre hasta el tope (termina apenas llega); GARRA_TIEMPO_MAX_MS solo como seguridad
-    await motor_dc_hasta_tope(motorgarra, -100, GARRA_TIEMPO_MAX_MS,
+    await motor_dc_hasta_tope(motorgarra, potencia, GARRA_TIEMPO_MAX_MS,
                               vel_tope=GARRA_VEL_TOPE, tiempo_tope_ms=GARRA_TIEMPO_TOPE_MS,
                               arranque_ms=GARRA_ARRANQUE_MS)
     motorgarra.hold()

@@ -115,10 +115,13 @@ async def avance(target_heading, distancia_mm, max_dc=100.0, min_dc=30.0, accel_
     # Sin freno: los motores quedan con la última potencia hasta la siguiente orden
 
 
-async def retrocede(target_heading, distancia_mm, max_dc=100.0, min_dc=30.0, accel_mm=50.0, decel_mm=140.0, kp=3.5, kd=0.18, freno=True, rampa_inicio=True):  # Calibrar min_dc: potencia mínima (arranque y final); muy baja = le cuesta arrancar
+async def retrocede(target_heading, distancia_mm, max_dc=100.0, min_dc=30.0, accel_mm=50.0, decel_mm=140.0, kp=3.5, kd=0.18, freno=True, rampa_inicio=True, dc_final=None):  # Calibrar min_dc: potencia mínima (arranque y final); muy baja = le cuesta arrancar
     # freno=False: no desacelera al final ni frena; los motores siguen girando para
     #   encadenar con el siguiente movimiento (otro retrocede, retrocede_hasta_pared...) sin detenerse.
     # rampa_inicio=False: arranca directo en max_dc (útil si viene de un movimiento sin freno).
+    # dc_final: (usar con freno=False) en los últimos decel_mm baja la potencia hasta dc_final, para
+    #   encadenar LIMPIO con un movimiento que va a esa potencia (ej. retrocede_hasta_linea).
+    #   En tramos cortos manda la menor de las dos rampas (arranque y bajada).
     left_motor.reset_angle(0)
     right_motor.reset_angle(0)
 
@@ -154,6 +157,8 @@ async def retrocede(target_heading, distancia_mm, max_dc=100.0, min_dc=30.0, acc
             dc_base = min_dc + (max_dc - min_dc) * proporcion
         else:
             dc_base = max_dc
+        if dc_final is not None and dist_restante < decel_mm:
+            dc_base = min(dc_base, dc_final + (max_dc - dc_final) * dist_restante / decel_mm)
 
         dc_base *= -1
 
@@ -579,27 +584,27 @@ DC_ELEVADOR_COMER = 75       # Calibrar: potencia de subir_elevador_todo al come
 async def agarrar_izquierda():
     from Line_sensors import retrocede_hasta_linea   # aquí y no arriba: evita el import circular
     await giro (-115)
-    await multitask (abrir_garra(),motor_dc_por_grados(motorElevador, 110, 100))
+    await multitask (abrir_garra(),motor_dc_por_grados(motorElevador, 115, 100))
     await giro_pivot (-90,True,60)
-    await motor_dc_por_grados(motorElevador, GRADOS_ELEVADOR_POQUITO-110, 100)
+    await motor_dc_por_grados(motorElevador, GRADOS_ELEVADOR_POQUITO-115, 100)
     await subir_elevador_todo()
-    await avance (-90,70,40,freno=True)
-    await bajar_elevador_grados(100, 20)   # baja un poco esquivando el cuadro; bajar_elevador lo devuelve
+    await avance (-90,90,40,freno=True)
+    await bajar_elevador_grados(120)   # baja un poco esquivando el cuadro; bajar_elevador lo devuelve
     await avance (-90,30,40,freno=False)
-    await multitask (avance (-90,60,40),bajar_elevador())
-    await retrocede_hasta_linea(-90,max_dc=40,min_sensores_linea=7)
-    await avance (-90,50,40)
+    await multitask (avance (-90,65,40),bajar_elevador())
+    await retrocede_hasta_linea(-90,max_dc=40,min_sensores_linea=6)
+    await avance (-90,68,40)
 
 async def agarrar_derecha():
     from Line_sensors import retrocede_hasta_linea   # aquí y no arriba: evita el import circular
     await giro (-65)
-    await multitask (abrir_garra(),motor_dc_por_grados(motorElevador, 110, 100))
+    await multitask (abrir_garra(),motor_dc_por_grados(motorElevador, 115, 100))
     await giro_pivot (-90,False,60)
-    await motor_dc_por_grados(motorElevador, GRADOS_ELEVADOR_POQUITO-110, 100)
+    await motor_dc_por_grados(motorElevador, GRADOS_ELEVADOR_POQUITO-115, 100)
     await subir_elevador_todo()
-    await avance (-90,70,40,freno=True)
-    await bajar_elevador_grados(100, 20)   # baja un poco esquivando el cuadro; bajar_elevador lo devuelve
+    await avance (-90,90,40,freno=True)
+    await bajar_elevador_grados(120)   # baja un poco esquivando el cuadro; bajar_elevador lo devuelve
     await avance (-90,30,40,freno=False)
-    await multitask (avance (-90,60,40),bajar_elevador())
-    await retrocede_hasta_linea(-90,max_dc=40,min_sensores_linea=7)
-    await avance (-90,50,40)
+    await multitask (avance (-90,65,40),bajar_elevador())
+    await retrocede_hasta_linea(-90,max_dc=40,min_sensores_linea=6)
+    await avance (-90,68,40)

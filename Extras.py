@@ -25,7 +25,7 @@ async def advertencia_bateria(boton_func):
     voltaje = (hub.battery.voltage() / 1000.0)
     print(voltaje)
 
-    if float(voltaje) <= 7.9 or voltaje > 8.35:
+    if float(voltaje) <= 8 or voltaje > 8.35:
         await sonido_advertencia()  
         while voltaje > 8.3:
             left_motor.dc(50)

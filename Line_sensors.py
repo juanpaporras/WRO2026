@@ -655,7 +655,7 @@ ERROR_MAXIMO_VALIDO = 8  # Calibrar: si el sensor ve la línea MÁS ALLÁ de est
 # BÚSQUEDA DE LÍNEA en seguir_linea_contando_lineas: si deja de ver la línea es porque se corrió hacia
 # los bloques (-90). En vez de seguir recto con el gyro, gira hacia el lado de 90 hasta volver a verla:
 # mirando a 0 corrige a la derecha (rumbo +ANGULO), mirando a 180 corrige a la izquierda (rumbo 180-ANGULO).
-ANGULO_BUSQUEDA_LINEA = 25   # Calibrar: grados hacia 90 con los que busca la línea (más = la encuentra antes, pero entra más torcido)
+ANGULO_BUSQUEDA_LINEA = 13   # Calibrar: grados hacia 90 con los que busca la línea (más = la encuentra antes, pero entra más torcido)
 VEL_BUSQUEDA_LINEA = 200     # Calibrar: mm/s máximos mientras busca (más lento = gira antes de avanzar mucho)
 LECTURAS_SIN_LINEA = 2       # Calibrar: lecturas seguidas sin ver la línea para empezar a buscar (filtra lecturas sueltas)
 
