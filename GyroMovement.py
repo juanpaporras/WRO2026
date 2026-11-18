@@ -17,6 +17,10 @@ right_motor = robot.right_motor
 # Pybricks recalibra el bias del gyro cuando cree que el hub está quieto (por debajo de estos umbrales).
 # Umbral angular bajo = no confunde un giro lento real con bias (evita deriva).
 hub.imu.settings(angular_velocity_threshold=2.0, acceleration_threshold=250)  # Calibrar: si nunca recalibra (deriva estando quieto), subir un poco angular_velocity_threshold
+# Corrección de ESCALA del gyro: grados que marca el hub por cada vuelta real (360 = sin corrección).
+# Se mide con medir_heading_correction() (Extras.py). Requiere firmware Pybricks que tenga heading_correction.
+HEADING_CORRECTION = 363.26   # Calibrar: poner el valor que imprime medir_heading_correction
+hub.imu.settings(heading_correction=HEADING_CORRECTION)
 
 async def avance_preciso(distancia_mm, vel_mm_s=150):
     """Avance (o retroceso si distancia_mm < 0) corto y PRECISO con el control de velocidad de
@@ -310,11 +314,36 @@ async def avance_hasta_pared(target_heading, dc=60.0, distancia_max=1000.0, igno
     return choco
 
 
-async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, tolerancia=1, tiempo_estabilizacion=40, tiempo_max=3000):
+async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, tolerancia=1, tiempo_estabilizacion=40, tiempo_max=3000, freno=True, lado=None):
+    # lado: None (por defecto) = gira por el camino más corto, como siempre.
+    #   "derecha" = horario (el heading SUBE), "izquierda" = antihorario (el heading BAJA),
+    #   aunque ese camino sea más largo (puede girar más de 180°).
+    # freno=False: gira a max_dc todo el tiempo (sin desacelerar), termina apenas llega o se pasa
+    #   del objetivo y no frena: los motores quedan con la última potencia para encadenar
+    #   con el siguiente movimiento (avance, retrocede, seguir línea...) sin detenerse.
     # tiempo_max: seguridad (ms); si no llega al objetivo en ese tiempo, termina igual para no quedarse pegado.
     # tiempo_estabilizacion: ms quieto dentro de la tolerancia para terminar (Calibrar: si queda corrido por inercia, subirlo)
+    # Con lado indicado se usa un objetivo continuo (el heading de Pybricks no se reinicia en ±180):
+    # el error no se normaliza, así no "cambia de idea" a mitad del giro.
+    heading_inicio = hub.imu.heading()
+    if lado == "derecha":
+        objetivo_continuo = heading_inicio + ((target_heading - heading_inicio) % 360)
+    elif lado == "izquierda":
+        objetivo_continuo = heading_inicio - ((heading_inicio - target_heading) % 360)
+    else:
+        objetivo_continuo = None   # camino más corto (lógica de siempre)
+    # Si ya está casi en el objetivo pero pasado unos grados, no dar una vuelta entera:
+    # corrige esos grados por el camino corto.
+    if objetivo_continuo is not None and abs(objetivo_continuo - heading_inicio) >= 350:
+        objetivo_continuo = None
+
+    def calcular_error():
+        if objetivo_continuo is None:
+            return ((target_heading - hub.imu.heading() + 180) % 360) - 180
+        return objetivo_continuo - hub.imu.heading()
+
     # Arranca la derivada con el error real para evitar el golpe del primer ciclo
-    error_previo = ((target_heading - hub.imu.heading() + 180) % 360) - 180
+    error_previo = calcular_error()
     derivada_filtrada = 0.0
     ALFA_FILTRO = 0.35
 
@@ -329,6 +358,7 @@ async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, toler
     # Anti-estancamiento: si el robot no gira (le falta poco y min_dc no alcanza), suma potencia extra
     empuje_extra = 0.0
     heading_previo = hub.imu.heading()
+    signo_error_previo = 1 if error_previo > 0 else -1
 
     while True:
         if cronometro_total.time() >= tiempo_max:
@@ -346,20 +376,29 @@ async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, toler
         else:
             empuje_extra = max(empuje_extra - 2.0, 0.0)
         heading_previo = heading_actual
-        error_ang = target_heading - heading_actual
-        error_ang = (error_ang + 180) % 360 - 180 
-        
+        if objetivo_continuo is None:
+            error_ang = target_heading - heading_actual
+            error_ang = (error_ang + 180) % 360 - 180
+        else:
+            error_ang = objetivo_continuo - heading_actual
+
         abs_error = abs(error_ang)
+
+        # Sin freno: termina en cuanto llega o se pasa, sin estabilizar ni frenar
+        signo_error = 1 if error_ang > 0 else -1
+        if not freno and (abs_error <= tolerancia or signo_error != signo_error_previo):
+            break
+        signo_error_previo = signo_error
 
         derivada_cruda = (error_ang - error_previo) / dt
         derivada_filtrada = (derivada_filtrada * (1.0 - ALFA_FILTRO)) + (derivada_cruda * ALFA_FILTRO)
-        
+
         termino_d = kd * derivada_filtrada
 
         if abs_error <= tolerancia:
             left_motor.hold()
             right_motor.hold()
-            
+
             if not estabilizando:
                 estabilizando = True
                 cronometro_estabilizacion.reset()
@@ -367,19 +406,22 @@ async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, toler
                 break
         else:
             estabilizando = False
-            
+
             ZONA_FRENADO = 35.0
-            if abs_error > ZONA_FRENADO:
+            if not freno or abs_error > ZONA_FRENADO:
                 limite_dc = max_dc
                 termino_p = max_dc if error_ang > 0 else -max_dc
             else:
                 proporcion = abs_error / ZONA_FRENADO
                 limite_dc = min_dc + (max_dc - min_dc) * proporcion
-                termino_p = kp * error_ang  
-            
-            salida_pd = termino_p + termino_d
-            salida_aplicada = max(min(salida_pd, limite_dc), -limite_dc)
-            
+                termino_p = kp * error_ang
+
+            if freno:
+                salida_pd = termino_p + termino_d
+                salida_aplicada = max(min(salida_pd, limite_dc), -limite_dc)
+            else:
+                salida_aplicada = termino_p   # potencia fija, sin PD que la reduzca
+
             minimo = min_dc + empuje_extra   # mínimo + extra si está estancado
             if abs(salida_aplicada) < minimo:
                 salida_aplicada = minimo if error_ang > 0 else -minimo
@@ -390,9 +432,11 @@ async def giro(target_heading, max_dc=100.0, min_dc=22.0, kp=2.0, kd=0.05, toler
         error_previo = error_ang
         await wait(10)
 
-    left_motor.hold()
-    right_motor.hold()
-    await wait(20)   # Calibrar: pausa final (antes 60 ms); el hold ya mantiene la posición
+    if freno:
+        left_motor.hold()
+        right_motor.hold()
+        await wait(20)   # Calibrar: pausa final (antes 60 ms); el hold ya mantiene la posición
+    # Sin freno: los motores quedan con la última potencia hasta la siguiente orden
 
 
 async def giro_arco(target_heading, radio_mm, velocidad_mm_s=250.0, adelante=True, vel_minima_mm_s=60.0, zona_frenado=20.0, tolerancia=1.0, tiempo_max=None, freno=True, lado=None):
@@ -476,7 +520,7 @@ async def giro_arco(target_heading, radio_mm, velocidad_mm_s=250.0, adelante=Tru
         right_motor.run(v_recto)
 
 
-async def giro_pivot(target_heading, pivote_izquierdo=True, max_dc=100.0, min_dc=35.0, kp=3.0, kd=0.08, zona_frenado=30.0, tolerancia=1, tiempo_estabilizacion=40, tiempo_max=3000, freno=True):
+async def giro_pivot(target_heading, pivote_izquierdo=True, max_dc=100.0, min_dc=35.0, kp=3.0, kd=0.08, zona_frenado=45.0, tolerancia=1, tiempo_estabilizacion=40, tiempo_max=3000, freno=True):
     """Giro sobre una rueda (la otra queda frenada con hold) con CONTROL DC + PD del giroscopio.
 
     - Lejos del objetivo: potencia máxima (max_dc) para que sea rápido.
@@ -583,28 +627,22 @@ DC_ELEVADOR_COMER = 75       # Calibrar: potencia de subir_elevador_todo al come
 
 async def agarrar_izquierda():
     from Line_sensors import retrocede_hasta_linea   # aquí y no arriba: evita el import circular
-    await giro (-115)
+    await giro (-116)
     await multitask (abrir_garra(),motor_dc_por_grados(motorElevador, 115, 100))
-    await giro_pivot (-90,True,60)
-    await motor_dc_por_grados(motorElevador, GRADOS_ELEVADOR_POQUITO-115, 100)
-    await subir_elevador_todo()
-    await avance (-90,90,40,freno=True)
-    await bajar_elevador_grados(120)   # baja un poco esquivando el cuadro; bajar_elevador lo devuelve
-    await avance (-90,30,40,freno=False)
+    await multitask (giro_pivot (-90,True,60), motor_dc_por_grados(motorElevador, GRADOS_ELEVADOR_POQUITO-115, 100))
+    await multitask(subir_elevador_todo(), avance (-90,90,40,freno=True))
+    await multitask (bajar_elevador_grados(60), avance (-90,45,40,freno=False))
     await multitask (avance (-90,65,40),bajar_elevador())
-    await retrocede_hasta_linea(-90,max_dc=40,min_sensores_linea=6)
+    await retrocede_hasta_linea(-90,max_dc=40,min_sensores_linea=5)
     await avance (-90,68,40)
 
 async def agarrar_derecha():
     from Line_sensors import retrocede_hasta_linea   # aquí y no arriba: evita el import circular
-    await giro (-65)
+    await giro (-64)
     await multitask (abrir_garra(),motor_dc_por_grados(motorElevador, 115, 100))
-    await giro_pivot (-90,False,60)
-    await motor_dc_por_grados(motorElevador, GRADOS_ELEVADOR_POQUITO-115, 100)
-    await subir_elevador_todo()
-    await avance (-90,90,40,freno=True)
-    await bajar_elevador_grados(120)   # baja un poco esquivando el cuadro; bajar_elevador lo devuelve
-    await avance (-90,30,40,freno=False)
+    await multitask (giro_pivot (-90,False,60), motor_dc_por_grados(motorElevador, GRADOS_ELEVADOR_POQUITO-115, 100))
+    await multitask(subir_elevador_todo(), avance (-90,90,40,freno=True))
+    await multitask (bajar_elevador_grados(60), avance (-90,45,40,freno=False))
     await multitask (avance (-90,65,40),bajar_elevador())
-    await retrocede_hasta_linea(-90,max_dc=40,min_sensores_linea=6)
+    await retrocede_hasta_linea(-90,max_dc=40,min_sensores_linea=5)
     await avance (-90,68,40)

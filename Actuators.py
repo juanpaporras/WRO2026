@@ -93,6 +93,8 @@ async def subir_elevador():
 async def bajar_elevador_poquito(potencia=60):
     # Baja POR GRADOS lo mismo que sube subir_elevador (GRADOS_ELEVADOR_POQUITO), no hasta el tope.
     # Calibrar: potencia (bajando ayuda el peso; más baja = más suave, muy baja = no se mueve)
+    global elevador_arriba
+    elevador_arriba = False
     if cuadro_esta_arriba():
         # Cuadro arriba: lo corre mientras baja el elevador y luego lo devuelve
         angulo_original = cuadro_angulo
@@ -107,16 +109,42 @@ async def bajar_elevador_poquito(potencia=60):
 # sigue girando, así que la detección por velocidad (motor_dc_hasta_tope) no ve el tope y sigue empujando.
 # Solución: bajar_elevador pone el ángulo en 0 al tocar el tope de ABAJO; con esa referencia la subida
 # va rápida hasta cerca de arriba, termina lenta y se detiene por GRADOS antes de forzar los engranes.
-ELEVADOR_GRADOS_ARRIBA = 340  # Calibrar con medir_elevador_arriba(): grados desde el tope de abajo hasta arriba.
+ELEVADOR_GRADOS_ARRIBA = 333  # Calibrar con medir_elevador_arriba(): grados desde el tope de abajo hasta arriba.
                              #   Poner unos 10° MENOS que lo medido. 0 = desactivado (sube hasta el tope como antes).
 ELEVADOR_MARGEN_LENTO = 80   # Calibrar: últimos grados de la subida que se hacen despacio
 ELEVADOR_DC_LENTO = 50       # Calibrar: potencia en ese tramo final (muy baja = no llega con carga)
 ELEVADOR_TIEMPO_MAX_MS = 1500
+ELEVADOR_VEL_TOPE = 60       # Calibrar: °/s por debajo de esto = el elevador llegó al tope y está esperando
+ELEVADOR_TIEMPO_TOPE_MS = 60 # Calibrar: ms seguidos frenado para confirmar el tope (muy bajo = para antes si se traba un momento)
+ELEVADOR_ARRANQUE_MS = 150   # Calibrar: ms del inicio en que no revisa el tope (el motor parte desde 0 °/s)
 
 elevador_referenciado = False   # True después de que bajar_elevador tocó el tope de abajo y puso el ángulo en 0
+elevador_arriba = False         # True si el elevador está COMPLETAMENTE arriba (subir_elevador_todo o estado_inicial_actuadores)
+
+def estado_inicial_actuadores(elevador_arriba_inicio=True, cuadro_inicio=CUADRO_ARRIBA):
+    """Le dice a las funciones cómo ARRANCA el robot (llamar al inicio de la Ruta 1, antes de mover nada).
+    - elevador_arriba_inicio=True: el elevador empieza ARRIBA -> subir_elevador_todo no lo vuelve a subir
+      (no fuerza los engranes contra el tope) y el ángulo queda como si estuviera en ELEVADOR_GRADOS_ARRIBA.
+    - cuadro_inicio: ángulo en el que arranca el cuadro (CUADRO_ARRIBA por defecto) -> el elevador sabe
+      que debe esquivarlo al bajar."""
+    global elevador_arriba, cuadro_angulo, cuadro_a_devolver
+    cuadro_angulo = cuadro_inicio
+    cuadro_a_devolver = None
+    elevador_arriba = elevador_arriba_inicio
+    if elevador_arriba_inicio:
+        motorElevador.reset_angle(ELEVADOR_GRADOS_ARRIBA)
+        motorElevador.hold()   # lo sostiene arriba desde el arranque
+    else:
+        motorElevador.reset_angle(0)
 
 async def subir_elevador_todo(potencia=100):
     # Al subir NO se mueve el cuadro: moverlo a la vez le quitaba voltaje a la subida
+    global elevador_arriba
+    if elevador_arriba:
+        # Ya está arriba: no empuja contra el tope (los engranes barrerían)
+        motorElevador.hold()
+        return
+    elevador_arriba = True
     if not elevador_referenciado or ELEVADOR_GRADOS_ARRIBA <= 0:
         # Sin referencia (todavía no se ha bajado) o sin calibrar: sube hasta el tope como antes
         await motor_dc_por_grados (motorElevador,ELEVADOR_GRADOS_ARRIBA-GRADOS_ELEVADOR_POQUITO-ELEVADOR_MARGEN_LENTO,potencia)
@@ -125,15 +153,36 @@ async def subir_elevador_todo(potencia=100):
         print("entro aca")
         return
     cronometro = StopWatch()
-    # Tramo rápido
+    cronometro_tope = StopWatch()
+    frenado = False
+    llego_tope = False
+    # Tramo rápido y luego tramo lento hasta el ángulo de arriba. En los dos: si el motor se
+    # FRENA (ya llegó al tope antes de ELEVADOR_GRADOS_ARRIBA), termina ahí en vez de esperar el tiempo máximo.
     motorElevador.dc(potencia)
-    while motorElevador.angle() < ELEVADOR_GRADOS_ARRIBA - ELEVADOR_MARGEN_LENTO and cronometro.time() < ELEVADOR_TIEMPO_MAX_MS:
-        await wait(5)
-    # Tramo lento hasta el ángulo de arriba (sin llegar a forzar el tope)
-    motorElevador.dc(ELEVADOR_DC_LENTO)
+    tramo_lento = False
     while motorElevador.angle() < ELEVADOR_GRADOS_ARRIBA and cronometro.time() < ELEVADOR_TIEMPO_MAX_MS:
+        if not tramo_lento and motorElevador.angle() >= ELEVADOR_GRADOS_ARRIBA - ELEVADOR_MARGEN_LENTO:
+            tramo_lento = True
+            motorElevador.dc(ELEVADOR_DC_LENTO)
+            frenado = False
+        # Detección de tope (no revisa al arrancar: el motor parte desde 0 °/s)
+        if cronometro.time() > ELEVADOR_ARRANQUE_MS and abs(motorElevador.speed()) < ELEVADOR_VEL_TOPE:
+            if not frenado:
+                frenado = True
+                cronometro_tope.reset()
+            elif cronometro_tope.time() >= ELEVADOR_TIEMPO_TOPE_MS:
+                llego_tope = True
+                break
+        else:
+            frenado = False
         await wait(5)
     motorElevador.hold()
+    if llego_tope:
+        # Llegó al tope antes del ángulo calibrado: avisa para poder bajar ELEVADOR_GRADOS_ARRIBA
+        print("subir_elevador_todo: tope en ángulo", motorElevador.angle(), "(ELEVADOR_GRADOS_ARRIBA =", ELEVADOR_GRADOS_ARRIBA, ")")
+    # Diagnóstico: si sale esto, no llegó a ELEVADOR_GRADOS_ARRIBA y se quedó empujando hasta el tiempo máximo
+    if cronometro.time() >= ELEVADOR_TIEMPO_MAX_MS:
+        print("subir_elevador_todo: TIEMPO MÁXIMO, ángulo", motorElevador.angle(), "de", ELEVADOR_GRADOS_ARRIBA)
 
 async def medir_elevador_arriba():
     """PRUEBA para calibrar ELEVADOR_GRADOS_ARRIBA: baja hasta el tope, sube DESPACIO hasta el tope de arriba
@@ -148,7 +197,8 @@ async def bajar_elevador_grados(grados, potencia=40):
     avanzar y luego bajar_elevador). Si el cuadro está arriba lo corre a CUADRO_ESQUIVA y lo DEJA
     corrido: bajar_elevador lo devuelve a su lugar cuando el elevador termina de bajar.
     Si el cuadro está abajo (agarrando algo) no se toca."""
-    global cuadro_a_devolver
+    global cuadro_a_devolver, elevador_arriba
+    elevador_arriba = False
     if cuadro_esta_arriba():
         angulo_original = cuadro_angulo
         await mover_cuadro(CUADRO_ESQUIVA, 300)
@@ -160,28 +210,29 @@ async def bajar_elevador_grados(grados, potencia=40):
 async def bajar_elevador():
     # Baja hasta que se BLOQUEA contra el tope de abajo (termina apenas llega) y luego sube 10° para no quedar forzando
     # Calibrar: potencia -30 y 1000 ms máximo de seguridad
-    global elevador_referenciado, cuadro_a_devolver
+    global elevador_referenciado, cuadro_a_devolver, elevador_arriba
+    elevador_arriba = False
     angulo_original = None
     if cuadro_a_devolver is not None:
         # bajar_elevador_grados ya dejó el cuadro corrido: solo baja y al final lo devuelve
         angulo_original = cuadro_a_devolver
         cuadro_a_devolver = None
-        await motor_dc_hasta_tope(motorElevador, -30, 1000)
+        await motor_dc_hasta_tope(motorElevador, -40, 1000)
     elif cuadro_esta_arriba():
         # Cuadro arriba: lo corre mientras baja el elevador y luego lo devuelve
         angulo_original = cuadro_angulo
         await mover_cuadro(CUADRO_ESQUIVA, 250)
-        await motor_dc_hasta_tope(motorElevador, -30, 1000)
+        await motor_dc_hasta_tope(motorElevador, -40, 1000)
     else:
         # Cuadro abajo agarrando algo: NO se toca
-        await motor_dc_hasta_tope(motorElevador, -30, 1000)
+        await motor_dc_hasta_tope(motorElevador, -40, 1000)
     # Tope de abajo = ángulo 0 (se fija ANTES de subir los 10°, para medir siempre desde el tope real)
     motorElevador.reset_angle(0)
     if angulo_original is not None:
         # Dentro de multitask van las funciones SIN await (multitask es quien las espera)
-        await multitask (mover_cuadro(angulo_original, 100), motor_dc_por_grados(motorElevador, 5, 100))
+        await multitask (mover_cuadro(angulo_original, 100), motor_dc_por_grados(motorElevador, 6, 100))
     else:
-        await motor_dc_por_grados(motorElevador, 5, 100)
+        await motor_dc_por_grados(motorElevador, 6, 100)
     elevador_referenciado = True
     motorElevador.hold()
 
@@ -194,7 +245,7 @@ async def bajar_cuadro_poquito():
 async def subir_cuadro(espera=600):
     await mover_cuadro(CUADRO_ARRIBA, espera)
 async def cerrar_paletas():
-    await servo(19, 270, 600)  # cerrar paletas
+    await servo(19, 260, 600)  # cerrar paletas
 
 async def abrir_paletas():
     await servo(19, 95,600)  # abrir paletas

@@ -265,8 +265,8 @@ async def seguir_linea_hasta_interseccion(lado="centro", vel_crucero_mm_s=600, k
         
         last_error = error
         await wait(10)
-        
-    await wait(150)
+
+    await wait(80)   # Calibrar: antes 150 (tiempo quieto al terminar)
 
 
 async def _montaje_pid(target_heading, distancia_mm, dc, kp, kd, sentido=1, dc_final=None):
@@ -501,7 +501,7 @@ class Registro:
         await seguir_linea_contando_lineas(..., registro=reg)
         await reg.resumen()
     Datos por muestra: t (ms), tramo, mm, ancho, err_sensor (error_espacial crudo), setpoint,
-    giro (°/s), heading (x10), vel (mm/s), modo, lineas.
+    giro (°/s), heading (x10), vel (mm/s pedida), vreal (mm/s real), modo, lineas.
     modo: 0 = siguiendo con PD, 1 = cruzando línea (gyro), 2 = sin línea o lectura descartada (gyro)."""
     def __init__(self, max_muestras=700):
         self.max = max_muestras
@@ -519,6 +519,7 @@ class Registro:
         self.giro = [0] * max_muestras
         self.head = [0] * max_muestras
         self.vel = [0] * max_muestras
+        self.vreal = [0] * max_muestras   # velocidad REAL (drive_base.state), vel es la pedida
         self.modo = [0] * max_muestras
         self.lineas = [0] * max_muestras
 
@@ -569,9 +570,11 @@ class Registro:
             anchos_cruce = [self.ancho[k] for k in idx if self.modo[k] == 1]
             # --- Líneas contadas (mm donde sube el contador) ---
             lineas_mm = []
+            lineas_vel = []   # (pedida, real) en mm/s en cada cruce
             for j in range(1, len(idx)):
                 if self.lineas[idx[j]] > self.lineas[idx[j - 1]]:
                     lineas_mm.append(self.mm[idx[j]])
+                    lineas_vel.append((self.vel[idx[j]], self.vreal[idx[j]]))
             # --- Heading respecto al rumbo objetivo ---
             desv = [((self.head[k] / 10 - target + 180) % 360) - 180 for k in idx]
             sin_linea = sum(1 for k in idx if self.modo[k] == 2)
@@ -585,15 +588,17 @@ class Registro:
                 min(anchos_pd) if anchos_pd else "-", max(anchos_pd) if anchos_pd else "-",
                 min(anchos_cruce) if anchos_cruce else "-", max(anchos_cruce) if anchos_cruce else "-"))
             print("lineas en mm {} | sin linea o lectura descartada {} ciclos".format(lineas_mm, sin_linea))
+            print("vel en cada linea (pedida, real) mm/s {}".format(lineas_vel))
             print("heading desv min {:.1f} max {:.1f} inicio {:.1f} fin {:.1f}".format(
                 min(desv), max(desv), desv[0], desv[-1]))
             await wait(50)
         print("=== FIN RESUMEN ===")
 
-    def agregar(self, mm, ancho, err_sensor, setpoint, giro, heading, vel, modo, lineas):
+    def agregar(self, mm, ancho, err_sensor, setpoint, giro, heading, vel, modo, lineas, vel_real=0):
         if self.n >= self.max:
             return
         k = self.n
+        self.vreal[k] = int(vel_real)
         self.t[k] = self.reloj.time()
         self.tr[k] = self.tramo
         self.mm[k] = int(mm)
@@ -608,7 +613,7 @@ class Registro:
         self.n = k + 1
 
 
-UMBRAL_INTERSECCION_BORDE = 7   # Calibrar (prueba: siguiendo llega a 5, cruzando a 8): ancho de línea (sensores) a partir del cual, siguiendo un borde, se considera que cruza una línea
+UMBRAL_INTERSECCION_BORDE = 6   # Calibrar (prueba: siguiendo llega a 5, cruzando a 8): ancho de línea (sensores) a partir del cual, siguiendo un borde, se considera que cruza una línea
 
 async def retroceder_hasta_linea(target_heading, vel_mm_s=100, umbral=None, distancia_max=150):
     """Retrocede recto (gyro) a velocidad baja y CONSTANTE hasta que el sensor detecta una línea
@@ -642,7 +647,14 @@ async def retroceder_hasta_linea(target_heading, vel_mm_s=100, umbral=None, dist
 
 
 DISTANCIA_ENTRE_LINEAS = 155  # Calibrar: mm entre líneas de color (prueba: ~158-161); usar un poco menos para frenar a tiempo
-FRENAR_ANTES_MM = 60          # Calibrar: mm antes de la línea objetivo en que baja a vel_aproximacion (más = más seguro, más lento)
+FRENAR_ANTES_MM = 90          # Calibrar (antes 60: de 500 a 300 necesita ~44 mm con straight_acceleration=1800): mm antes de la línea objetivo en que baja a vel_aproximacion (más = más seguro, más lento)
+# Llegada FINAL más lenta (solo si se pasa vel_final_mm_s): entre lectura y lectura del sensor el robot avanza
+# velocidad x ciclo, y la línea se detecta en cualquier punto de ese tramo. Más lento al llegar = detección
+# más exacta = montajes más iguales.
+FINAL_LENTO_MM = 50           # Calibrar (antes 40; con 90/50 llega ~30 mm a vel_final estable antes de la línea): mm antes de donde debería estar la línea objetivo en que baja a vel_final_mm_s
+MM_LENTO_UNA_LINEA = 0        # Calibrar: movimiento de UNA línea (no sabe dónde empezó): mm recorridos desde el inicio para bajar a vel_final.
+                              #   0 = va a vel_final desde el arranque (tras girar 180 la línea puede quedar a ~70 mm y no alcanzaba
+                              #   a frenar). Así cruza a la misma velocidad que con varias líneas. Antes 60.
 
 ERROR_MAXIMO_VALIDO = 8  # Calibrar: si el sensor ve la línea MÁS ALLÁ de esta posición del lado CONTRARIO al borde que sigue
                          #   (error_espacial > +N siguiendo por la izquierda, < -N por la derecha) se ignora: ese ciclo va con gyro.
@@ -659,7 +671,7 @@ ANGULO_BUSQUEDA_LINEA = 13   # Calibrar: grados hacia 90 con los que busca la l�
 VEL_BUSQUEDA_LINEA = 200     # Calibrar: mm/s máximos mientras busca (más lento = gira antes de avanzar mucho)
 LECTURAS_SIN_LINEA = 2       # Calibrar: lecturas seguidas sin ver la línea para empezar a buscar (filtra lecturas sueltas)
 
-async def seguir_linea_contando_lineas(lado, num_lineas, target_heading, offset=5.0, vel_crucero_mm_s=450, vel_aproximacion_mm_s=250, vel_minima_mm_s=80, accel_mm=50, distancia_ignorar=50, montarse=False, distancia_montaje=20, umbral_interseccion=UMBRAL_INTERSECCION_BORDE, kp=6, kd=2.8, vel_referencia=600, factor_adentro=FACTOR_ADENTRO, registro=None):
+async def seguir_linea_contando_lineas(lado, num_lineas, target_heading, offset=5.0, vel_crucero_mm_s=450, vel_aproximacion_mm_s=250, vel_minima_mm_s=80, accel_mm=50, distancia_ignorar=50, montarse=False, distancia_montaje=20, umbral_interseccion=UMBRAL_INTERSECCION_BORDE, kp=6, kd=2.8, vel_referencia=600, factor_adentro=FACTOR_ADENTRO, registro=None, vel_final_mm_s=None):
     """Sigue la línea vertical por un BORDE contando las líneas que la cruzan, SIN frenar en las
     intermedias. En la línea número num_lineas frena (o se monta distancia_montaje con desaceleración).
     - lado: "izquierda" (setpoint -offset) o "derecha" (setpoint +offset).
@@ -667,7 +679,9 @@ async def seguir_linea_contando_lineas(lado, num_lineas, target_heading, offset=
       y el error no sirve), si pierde la línea y durante el montaje.
     - distancia_ignorar: mm iniciales en los que no cuenta líneas (por ejemplo la línea de donde sale).
     - vel_aproximacion_mm_s: velocidad desde que cruzó la penúltima línea (llega más suave a la última).
-    - registro: objeto Registro para guardar los datos del recorrido (None = no guarda nada)."""
+    - registro: objeto Registro para guardar los datos del recorrido (None = no guarda nada).
+    - vel_final_mm_s: velocidad en los últimos FINAL_LENTO_MM antes de la línea objetivo (None = no baja más
+      que vel_aproximacion). Con 1 sola línea baja después de MM_LENTO_UNA_LINEA recorridos."""
     setpoint = -abs(offset) if lado == "izquierda" else abs(offset)
     inicio = robot.drive_base.distance()
     if registro is not None:
@@ -697,6 +711,14 @@ async def seguir_linea_contando_lineas(lado, num_lineas, target_heading, offset=
         if lineas_contadas >= num_lineas - 1 and (lineas_contadas == 0 or
                 recorrido - mm_ultima_linea >= DISTANCIA_ENTRE_LINEAS - FRENAR_ANTES_MM):
             vel_objetivo = vel_aproximacion_mm_s
+            # Último tramo antes de la línea objetivo: más lento para detectarla en un punto exacto
+            if vel_final_mm_s is not None:
+                if lineas_contadas == 0:
+                    tramo_final = recorrido >= MM_LENTO_UNA_LINEA
+                else:
+                    tramo_final = recorrido - mm_ultima_linea >= DISTANCIA_ENTRE_LINEAS - FINAL_LENTO_MM
+                if tramo_final:
+                    vel_objetivo = min(vel_final_mm_s, vel_aproximacion_mm_s)
         else:
             vel_objetivo = vel_crucero_mm_s
         if recorrido < accel_mm:
@@ -714,6 +736,11 @@ async def seguir_linea_contando_lineas(lado, num_lineas, target_heading, offset=
                 lineas_contadas += 1
                 mm_ultima_linea = recorrido
                 if lineas_contadas >= num_lineas:
+                    if registro is not None:
+                        # Guarda también la muestra de la línea FINAL (antes se salía sin guardarla)
+                        registro.agregar(recorrido, ancho, sensor_mbc.error_espacial, setpoint, 0,
+                                         hub.imu.heading(), vel, 1, lineas_contadas,
+                                         robot.drive_base.state()[1])
                     break
             lecturas_fuera = 0
         elif sobre_linea:
@@ -761,7 +788,8 @@ async def seguir_linea_contando_lineas(lado, num_lineas, target_heading, offset=
 
         if registro is not None:
             registro.agregar(recorrido, ancho, sensor_mbc.error_espacial, setpoint, turn_rate,
-                             hub.imu.heading(), vel, modo, lineas_contadas)
+                             hub.imu.heading(), vel, modo, lineas_contadas,
+                             robot.drive_base.state()[1])
         await wait(10)
 
     if montarse and distancia_montaje > 0:
