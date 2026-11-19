@@ -111,6 +111,14 @@ MONTAJE_DIRECTO_DESCARGA = DESCARGA_UN_BLOQUE - MONTAJE_SIN_CAMBIO + 2 * DISTANC
 BUSQUEDA_LINEA_MM = 130        # Calibrar: mm que re_referenciar_lado busca la línea hacia ATRÁS antes de buscarla adelante (menos que lo que falta a la línea vecina, ~155 mm entre líneas)
 
 # =============================================================================
+# AGARRAR MAYORÍA (se come los 4 bloques de las 2 primeras filas)
+# =============================================================================
+MONTAJE_CENTRO_MAYORIA = DISTANCIA_SENSOR_EJE   # Calibrar: mm que se monta después de detectar la línea para que el EJE quede en el centro de ella
+VEL_LINEA_MAYORIA = 110        # Calibrar: mm/s del seguir línea a -90 hasta la intersección
+AVANCE_COMER_MAYORIA = 120     # Calibrar: mm que avanza a -90 para comerse los 4 bloques de las 2 primeras filas
+DC_COMER_MAYORIA = 35          # Calibrar: potencia del avance y del retroceso de comer (baja: va empujando bloques con el elevador)
+
+# =============================================================================
 # AGARRAR ROJO (cuadro gris arriba a la derecha, desde la posición 4 lado izquierdo)
 # =============================================================================
 ROJO_AVANCE_50 = 130          # Calibrar: mm de avance a 56° hasta que la garra quede sobre el rojo
@@ -439,30 +447,55 @@ async def agarrar_mayoria(color_mayoria):
     if color_mayoria is None:   # no hubo color válido en el lado mayoría: no se mueve (evita el error None - posicion_actual)
         print("agarrar_mayoria: sin color mayoría, se salta")
         return
-    # 1) Va a la línea del color mayoría, lado DERECHO (objetivo es RELATIVO: cuántas líneas moverse)
-    await logica_de_movimiento(color_mayoria - posicion_actual, 0)
-    # 2) Agarra el bloque derecho de la 1ª fila (fila=0: no toca colores, el color está reservado)
-    await logica_de_recoleccion(fila=0)
-    # 3) Cambia al lado IZQUIERDO en la misma línea (avance de DISTANCIA_CAMBIO_LADO, sin comer)
-    await logica_de_movimiento(0, 1)
-    # 4) Agarra el bloque izquierdo de la 1ª fila y retrocede a la línea vertical (NO se los come)
-    await logica_de_recoleccion(fila=0)
-    await giro (0)
-    await multitask (abrir_garra(),avance(0,DISTANCIA_CAMBIO_LADO/2,35))
-    await retrocede(0,16,40)
-    await cerrar_garra_poquito()
-    await giro(-90)
-    await multitask(seguir_linea_hasta_interseccion("centro",250),subir_elevador_todo())
-    await multitask(bajar_elevador_grados(30),avance(-90,200,35))
-    await multitask (bajar_elevador(),avance(-90,30,30))
-    await multitask (retrocede_hasta_linea(-90,esperar_blanco=False),bajar_elevador())
-    await multitask(subir_elevador_todo(),avance(-90,150,30))
+    # 1) Va a la línea del color mayoría y queda con el EJE en el CENTRO de la línea (ni arriba ni abajo).
+    objetivo = color_mayoria - posicion_actual
+    if objetivo != 0:
+        # Llega siguiendo la línea vertical: al detectar la línea de color el sensor va DISTANCIA_SENSOR_EJE
+        # delante del eje, así que montarse esa distancia deja el eje sobre la línea.
+        # lado_posicion_objetivo=1 solo para no entrar al caso especial de "4 por la derecha"; el lado no importa.
+        await logica_de_movimiento(objetivo, 1, distancia_montaje=MONTAJE_CENTRO_MAYORIA)
+    else:
+        # Ya está en esa línea (a un lado): re-referencia con la línea y centra el eje.
+        # Mira HACIA AFUERA de la línea (la línea queda detrás del sensor), retrocede hasta verla
+        # (el eje queda DISTANCIA_SENSOR_EJE pasado) y avanza esa distancia.
+        heading_ref = 0 if lado_posicion_actual == 1 else 180
+        await giro (heading_ref)
+        await retroceder_hasta_linea (heading_ref, vel_mm_s=VEL_REFERENCIA_DESCARGA)
+        await avance_preciso (MONTAJE_CENTRO_MAYORIA, vel_mm_s=VEL_AJUSTE_DESCARGA)
+    posicion_actual = color_mayoria
+    # lado_posicion_actual: el robot queda EN EL CENTRO (no es ni 0 ni 1). Actualizarlo al terminar la rutina.
+    # 2) Gira hacia los bloques mientras sube el elevador y cierra un poco la garra
+    await multitask(giro(-90), motor_dc_por_grados (motorgarra,65,80),subir_elevador_todo())
+    # 3) Sigue la línea de color por el centro hasta la intersección y se monta 20 mm
+    await seguir_linea_hasta_interseccion("centro", target_heading=-90, vel_crucero_mm_s=VEL_LINEA_MAYORIA)
+    # 4) Baja el elevador, abre la garra, y la cierra poquito mientras sube el elevador
     await bajar_elevador()
+    await abrir_garra(-55)
+    await multitask(cerrar_garra_poquito(), subir_elevador_todo())
+    # 5) Avanza para comerse los 4 bloques de las 2 primeras filas
+    await avance(-90, AVANCE_COMER_MAYORIA, DC_COMER_MAYORIA)
+    # 6) Baja el elevador 250° y retrocede 40 mm menos de lo que avanzó
+    await bajar_elevador_grados(250)
+    await retrocede(-90, AVANCE_COMER_MAYORIA - 40, DC_COMER_MAYORIA)
+    # --- De aquí en adelante: lo que falta ---
+    await multitask(bajar_elevador(),abrir_garra())
+    await giro (-90-8)
+    await avance(-90-8,40,40)
+    await cerrar_garra_poquito()
+    await retrocede(-90-8,40,40)
+    await giro (-90+8)
+    await abrir_garra()
+    await avance(-90+8,40,40)
+    await cerrar_garra_poquito()
+    await retrocede(-90+8,40,40)
+    await giro(-90)
     await retrocede_hasta_linea(-90,esperar_blanco=False)
     await retrocede(-90,DISTANCIA_PRIMERA_FILA+PASO_COLUMNA-35,40)
     await giro (180)
     await avance(180,DISTANCIA_CAMBIO_LADO/2-15)
     lado_posicion_actual=0
+
+    
 
   
 def sacar_mayoria(izquierda, derecha, lado_rojo_idx=None):
@@ -543,19 +576,27 @@ async def dejar_bloques(heading,retroceso_centro=25,retroceso_lados=85):
     await cerrar_garra()
     await subir_elevador()
     await seguir_linea_hasta_interseccion(vel_crucero_mm_s=250)
-    await avance_hasta_pared(heading,40,tiempo_stall=150)
+    await avance_hasta_pared(heading,45,tiempo_stall=150)
     reset_heading_seguro(heading)
     #soltarlos
-    await avance_preciso(-20, vel_mm_s=VEL_DEJAR_BLOQUES_LENTO)   # antes retrocede (heading,10,30,30,10,10)
+    await avance_preciso(-23, vel_mm_s=VEL_DEJAR_BLOQUES_LENTO)   # antes retrocede (heading,10,30,30,10,10)
     await bajar_elevador()
     await motor_dc_por_grados(motorElevador,57,100)
     await motor_dc_por_grados (motorgarra,50,-70)
     await abrir_garra(-100)
     await motor_dc_por_grados (motorgarra,9,80)
+    await giro (heading+2)
+    await giro (heading-2)
+    await giro (heading)
     await avance_preciso(-30, vel_mm_s=VEL_DEJAR_BLOQUES)   # antes retrocede (heading,30,50)
-    await motor_dc_hasta_tope(motorgarra,40,1000,60,40,120)
-    await avance_preciso(-11, vel_mm_s=VEL_DEJAR_BLOQUES)   # antes retrocede (heading,11,50)
-    await abrir_garra(-60)
+    await motor_dc_hasta_tope (motorgarra,40,1000,60,40,120)
+    await avance_preciso (-13, vel_mm_s=VEL_DEJAR_BLOQUES)   # antes retrocede (heading,11,50)
+    await motor_dc_por_grados (motorgarra,50,-70)
+    await abrir_garra(-100)
+    await motor_dc_por_grados (motorgarra,9,80)
+    await giro (heading+2)
+    await giro (heading-2)
+    await giro (heading)
     await subir_elevador()
 
 # ---------------------------------------------------------
@@ -612,64 +653,22 @@ async def Ruta_2_Recoger_y_llevar_cemento_siguiendo_linea():
 async def Ruta_2_Recoger_y_llevar_cemento():     
     await avance(180, 150, 80)
     await seguir_linea_distancia(distancia_mm=75, vel_crucero_mm_s=300)
-    await multitask (giro(90, lado="derecha", max_dc=80),bajar_cuadro(espera=200))
-    # await multitask(bajar_cuadro(300), giro(90))
-    #await giro(90)
-    await seguir_linea_distancia(distancia_mm=550, vel_crucero_mm_s=500, freno=False)
-    await giro_pivot(0, max_dc=80, pivote_izquierdo=True, freno=False)
-    await avance(0, 10, freno=False)
-    await giro_pivot(90, max_dc=80, pivote_izquierdo=False)
-    await multitask(bajar_cuadro_poquito(), retrocede(90, 30))
-    await multitask (seguir_linea_distancia(distancia_mm=100, vel_crucero_mm_s=250),subir_cuadro(200))
-
-async def Ruta_3_recoger_ladrillos_azules(): 
-    # await multitask(giro(-90),abrir_paletas() )
-    # await retrocede(-90, 180, 40,freno=False)
-    # await multitask(cerrar_paletas(), retrocede(-90, 40, 40))
-    # await retrocede_hasta_pared(-90, 60)
-    # reset_heading_seguro(-90)
-    # await avance(-90, 140)
-    # await seguir_linea_hasta_interseccion("centro", target_heading=-90, vel_crucero_mm_s=400, montarse=False)
-    # await giro(0)
-    # await retrocede(0, 200, freno= False)
-    # await retrocede_hasta_pared(0, 40)
-    # reset_heading_seguro(0)
-    # await avance(0, 120) 
-    # await giro_pivot(90)
-    # await retrocede(90, 200)
-    # await multitask(bajar_cuadro(), retrocede(90, 680, max_dc= 70))
-    # await avance(90, 100)
-    # await giro(120)
-    # await retrocede(120, 280)
-    # await giro(90)
-    # await retrocede(90, 350, freno= False)
-    # await retrocede_hasta_pared(90, 30)
-    # reset_heading_seguro(90)
-    # await avance(90, 150)
-    # await giro_pivot(67.5, pivote_izquierdo= False)
-    # await multitask(subir_cuadro(), bajar_elevador())
-    # await giro_pivot(90, pivote_izquierdo= False)
-    # await avance(90, 55)
-    # await giro(0)
-
-    await multitask(giro(-90),abrir_paletas() )
-    await retrocede(-90, 180, 40,freno=False)
-    await multitask(cerrar_paletas(), retrocede(-90, 40, 40))
-    await retrocede_hasta_pared(-90, 60)
-    reset_heading_seguro(-90)
-
-    await avance(-90, 100)
-    await giro(45)
-    await retrocede(45, 400)
+    await multitask (giro(0),bajar_cuadro(espera=200))
+    await giro(90)
+    await seguir_linea_distancia(distancia_mm=600, vel_crucero_mm_s=500, freno=False)
+    await giro(180)
+    await giro(160, max_dc=80)
+    await giro(180, max_dc=30)
+    await subir_cuadro()
     await giro(0)
-    await retrocede_hasta_pared(0, 40)
 
+async def Ruta_3_recoger_herramienrtas(): 
+ 
+    await retrocede_hasta_pared(0, 40)
     reset_heading_seguro(0)
     await avance(0, 120) 
     await giro_pivot(90)
-    # await retrocede(90, 100, freno=False)
     await multitask(bajar_cuadro(), retrocede(90, 780, max_dc= 90))
-    # await avance(90, 100)
     await giro(120)
     await retrocede(120, 280)
     await giro(90)
@@ -696,16 +695,14 @@ async def Ruta_4_resolver_izquierda() :
         await agarrar_mayoria(color_mayoria)
     await llevar_a_mosaico_izquierda()
 
-async def Ruta_5_dejar_bloques_y_azules():
+async def Ruta_5_posicionamiento():
     global lectura, posicion_actual, lado_posicion_actual, llevadas
     await dejar_bloques(90)
     await retrocede(90,170)
     await giro(-90)
-    await multitask(retrocede(-90, 180,35), abrir_paletas())
-    await avance(-90, 180)
-    await multitask(cerrar_paletas(),seguir_linea_distancia(50,300,freno=False))
+    await seguir_linea_distancia(50,300,freno=False)
     await seguir_linea_hasta_interseccion(distancia_montaje=DISTANCIA_MONTAJE-15,vel_crucero_mm_s=400,montarse=True)
-    await multitask (giro(0),bajar_elevador())
+    await multitask (giro(0),bajar_elevador(),cerrar_paletas())
     await seguir_linea_hasta_interseccion("izquierda",300,montarse=True,distancia_montaje=MONTAJE_SIN_CAMBIO)
     posicion_actual=3
     lado_posicion_actual=0 #izquierda posicion 3 para empezar la logica del lado derecho
@@ -864,7 +861,8 @@ async def Ruta_prueba_mayoria():
 
     posicion_actual = 0                  # 0 = línea de abajo (inicio)
     lado_posicion_actual = 0             # 0 = lado izquierdo (abajo)
-
+    await bajar_elevador()
+    await subir_elevador()
     await agarrar_mayoria(color_mayoria)
     print("Fin prueba mayoría | color:", color_mayoria, "| posicion:", posicion_actual, "| lado:", lado_posicion_actual)
 
@@ -918,9 +916,9 @@ async def Run():
     # # ---------------- RUTAS DE COMPETICIÓN (en orden) ----------------
     await Ruta_1_Lectura()
     await Ruta_2_Recoger_y_llevar_cemento()
-    await Ruta_3_recoger_ladrillos_azules()
+    await Ruta_3_recoger_herramienrtas()
     await Ruta_4_resolver_izquierda()
-    await Ruta_5_dejar_bloques_y_azules()
+    await Ruta_5_posicionamiento()
     await Ruta_6_resolver_derecha()
     await Ruta_7_llevar_bloques()
     # await Ruta_8_ladrillos_verdes()
