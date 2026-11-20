@@ -14,7 +14,7 @@ from Actuators import (
 )
 from Extras import boton, advertencia_bateria, medir_trayectos_manual, medir_heading_correction
 from GyroMovement import HEADING_CORRECTION
-from Funciones_ESP32 import iniciar_esp32, proceso_esp32, leer_camara
+from Funciones_ESP32 import iniciar_esp32, proceso_esp32, leer_camara, prueba_camara
 
 # =============================================================================
 # ESTADO DE LA LÓGICA (variables que cambian durante la ruta)
@@ -137,9 +137,11 @@ async def lectura_camara():
     - No se leyó nada -> usa LECTURA_DEFECTO_IZQ / LECTURA_DEFECTO_DER."""
     global izquierda, derecha, lado_rojo
     for intento in range(INTENTOS_CAMARA):
-        izquierda, derecha, lado_rojo, _, _, _ = await leer_camara()
+        izquierda, derecha, lado_rojo, color_mas, veces, empate = await leer_camara()
+        # Imprime SIEMPRE lo que leyó la cámara (también si la lectura vino incompleta)
+        print("Cámara intento", intento + 1, "-> Izquierda:", izquierda, "| Derecha:", derecha,
+              "| lado_rojo:", lado_rojo, "| más repetido:", color_mas, "x", veces, "| empate:", empate)
         if len(izquierda) == 6 and len(derecha) == 6 and lado_rojo != -1:
-            print("Cámara:", izquierda, derecha, "| lado_rojo:", lado_rojo)
             return True
         print("Cámara: lectura incompleta, intento", intento + 1, "de", INTENTOS_CAMARA)
 
@@ -549,7 +551,7 @@ def reservar_mayoria():
 VEL_DEJAR_BLOQUES = 150        # Calibrar: mm/s de los retrocesos precisos de dejar_bloques (avance_preciso: misma distancia con cualquier batería)
 VEL_DEJAR_BLOQUES_LENTO = 100  # Calibrar: mm/s de los retrocesos muy cortos (10-16 mm) donde antes se usaba potencia 30-40
 
-async def dejar_bloques(heading,retroceso_centro=25,retroceso_lados=85):
+async def dejar_bloques(heading,retroceso_centro=25,retroceso_lados=78):
     #agarrarlos)
     await multitask (abrir_garra(),seguir_linea_distancia (distancia_mm=140, vel_crucero_mm_s=120))
     await avance_preciso(-retroceso_centro, vel_mm_s=VEL_DEJAR_BLOQUES_LENTO)   # antes retrocede(heading,retroceso_centro,40)
@@ -578,24 +580,25 @@ async def dejar_bloques(heading,retroceso_centro=25,retroceso_lados=85):
     await seguir_linea_hasta_interseccion(vel_crucero_mm_s=250)
     await avance_hasta_pared(heading,45,tiempo_stall=150)
     reset_heading_seguro(heading)
+
     #soltarlos
-    await avance_preciso(-23, vel_mm_s=VEL_DEJAR_BLOQUES_LENTO)   # antes retrocede (heading,10,30,30,10,10)
+    await avance_preciso(-20, vel_mm_s=VEL_DEJAR_BLOQUES_LENTO)   # antes retrocede (heading,10,30,30,10,10)
     await bajar_elevador()
     await motor_dc_por_grados(motorElevador,57,100)
     await motor_dc_por_grados (motorgarra,50,-70)
     await abrir_garra(-100)
-    await motor_dc_por_grados (motorgarra,9,80)
-    await giro (heading+2)
-    await giro (heading-2)
+    await motor_dc_por_grados (motorgarra,5,80)
+    await giro (heading+4, min_dc=30)
+    await giro (heading-4, min_dc=30)
     await giro (heading)
     await avance_preciso(-30, vel_mm_s=VEL_DEJAR_BLOQUES)   # antes retrocede (heading,30,50)
     await motor_dc_hasta_tope (motorgarra,40,1000,60,40,120)
     await avance_preciso (-13, vel_mm_s=VEL_DEJAR_BLOQUES)   # antes retrocede (heading,11,50)
     await motor_dc_por_grados (motorgarra,50,-70)
     await abrir_garra(-100)
-    await motor_dc_por_grados (motorgarra,9,80)
-    await giro (heading+2)
-    await giro (heading-2)
+    await motor_dc_por_grados (motorgarra,5,80)
+    await giro (heading+4, min_dc=30)
+    await giro (heading-4, min_dc=30)
     await giro (heading)
     await subir_elevador()
 
@@ -613,53 +616,30 @@ async def Ruta_1_Lectura(): # --> RUTA EN LISTA #Se acomoda de la salida y sigue
     await multitask(giro_pivot(90, pivote_izquierdo=False), subir_cuadro(), cerrar_paletas())
     await avance(90, 200, 80,freno=False)
     await seguir_linea_distancia(distancia_mm=500, vel_crucero_mm_s=700)
-    await seguir_linea_hasta_interseccion("centro", target_heading=90, vel_crucero_mm_s=400, montarse=True, distancia_montaje=50)
+    await seguir_linea_hasta_interseccion("centro", target_heading=90, vel_crucero_mm_s=400, montarse=True, distancia_montaje=57)
     await giro(180)
     await retrocede(180, 150)
     await retrocede_hasta_pared(180, distancia_max=1000, dc=40)
     reset_heading_seguro(180)
-    #await lectura_camara()
-    # Lectura ALEATORIA (mientras no se usa la cámara): cada lado 6 colores del 1 al 4,
-    # un lado al azar lleva un 5 (rojo) en una posición al azar. Orden: fila1 + fila3 + fila2, igual que leer_camara.
-    # Semilla con el "ruido" del acelerómetro y la batería para que cada corrida sea distinta
-    ax, ay, az = hub.imu.acceleration()
-    seed(int(abs(ax) * 1000 + abs(ay) * 100 + abs(az) * 10) + hub.battery.voltage() + hub.battery.current())
-    izquierda = [randint(1, 4) for _ in range(6)]
-    derecha   = [randint(1, 4) for _ in range(6)]
-    lado_rojo = randint(0, 1)        # NÚMERO, no lista: 0 = el 5 está en izquierda, 1 = en derecha
-    if lado_rojo == 0:
-        izquierda[randint(0, 5)] = 5
-    else:
-        derecha[randint(0, 5)] = 5
-    # Lectura MANUAL: descomentar para repetir un caso concreto
-    izquierda = [2, 4, 4, 2, 4, 2]
-    derecha   = [5, 3, 4, 2, 4, 3]
-    lado_rojo = 1
+    await avance_preciso(32)
+    await lectura_camara()           # Lectura REAL con la cámara (plan B si falla, ver lectura_camara)
+    # Lectura MANUAL: descomentar para repetir un caso concreto (pisa la lectura de la cámara)
+    # izquierda = [2, 4, 4, 2, 4, 2]
+    # derecha   = [5, 3, 4, 2, 4, 3]
+    # lado_rojo = 1
     print("Lectura Ruta 1 -> Izquierda:", izquierda, "| Derecha:", derecha, "| lado_rojo:", lado_rojo)
     reservar_mayoria()               # siempre DESPUÉS de dar los valores
 
-async def Ruta_2_Recoger_y_llevar_cemento_siguiendo_linea():     
-    await avance(180, 150, 80)
-    await seguir_linea_distancia(distancia_mm=75, vel_crucero_mm_s=300)
-    await multitask (giro(0),bajar_cuadro())
-    await giro(90)
-    await seguir_linea_distancia(distancia_mm=550, vel_crucero_mm_s=500, freno=False)
-    await giro_pivot(0, pivote_izquierdo=True, freno=False)
-    await avance(0, 10, freno=False)
-    await giro_pivot(90, pivote_izquierdo=False)
-    await multitask(bajar_cuadro_poquito(), retrocede(90, 30))
-    await multitask (seguir_linea_distancia(distancia_mm=100, vel_crucero_mm_s=250),subir_cuadro(200))
-
 async def Ruta_2_Recoger_y_llevar_cemento():     
     await avance(180, 150, 80)
-    await seguir_linea_distancia(distancia_mm=75, vel_crucero_mm_s=300)
-    await multitask (giro(0),bajar_cuadro(espera=200))
+    await seguir_linea_hasta_interseccion("centro", vel_crucero_mm_s=400, montarse=True, distancia_montaje=35)
+    await multitask (giro(0),bajar_cuadro(espera=900))
     await giro(90)
     await seguir_linea_distancia(distancia_mm=600, vel_crucero_mm_s=500, freno=False)
     await giro(180)
-    await giro(160, max_dc=80)
-    await giro(180, max_dc=30)
+    await giro(150, max_dc=80)
     await subir_cuadro()
+    await giro(180, max_dc=30)
     await giro(0)
 
 async def Ruta_3_recoger_herramienrtas(): 
@@ -668,11 +648,11 @@ async def Ruta_3_recoger_herramienrtas():
     reset_heading_seguro(0)
     await avance(0, 120) 
     await giro_pivot(90)
-    await multitask(bajar_cuadro(), retrocede(90, 780, max_dc= 90))
+    await multitask(bajar_cuadro(), retrocede(90, 775, max_dc= 85))
     await giro(120)
     await retrocede(120, 280)
     await giro(90)
-    await retrocede(90, 300, freno= False)
+    await retrocede(90, 250, freno= False)
     await retrocede_hasta_pared(90, 30)
     reset_heading_seguro(90)
     await avance(90, 150)
@@ -904,14 +884,15 @@ async def Run():
     await hub.speaker.beep(1000, 50)
     # # Espera a que el gyro termine de calibrar su bias inicial (NO mover el robot hasta el beep)
     # espera_imu = 0
-    # while not hub.imu.ready() and espera_imu < 3000:   # máximo 3 s de seguridad
-    #     await wait(10)
-    #     espera_imu += 10
-    # if not hub.imu.ready():
-    #     print("ADVERTENCIA: el giroscopio no terminó de calibrar (¿se movió el robot al iniciar?)")
-    # hub.imu.reset_heading(0)
-    # await hub.speaker.beep(1500, 50)   # beep de "giroscopio listo"
+    while not hub.imu.ready() and espera_imu < 3000:   # máximo 3 s de seguridad
+        await wait(10)
+        espera_imu += 10
+    if not hub.imu.ready():
+        print("ADVERTENCIA: el giroscopio no terminó de calibrar (¿se movió el robot al iniciar?)")
+    hub.imu.reset_heading(0)
+    await hub.speaker.beep(1500, 50)   # beep de "giroscopio listo"
     # await boton()
+    reset_heading_seguro(0)
     await advertencia_bateria(boton)   # antes recibía None y fallaba si la batería estaba fuera de rango
     # # ---------------- RUTAS DE COMPETICIÓN (en orden) ----------------
     await Ruta_1_Lectura()
@@ -926,6 +907,7 @@ async def Run():
     #await Ruta_blancos()             # No se sabe si se va a usar, hay que ver si alcanza el tiempo
 
     # ---------------- PRUEBAS (descomentar una y comentar las rutas de arriba) ----------------
+    #await prueba_camara()            # Robot quieto frente al mosaico: imprime lo que manda el ESP32 cada 0.5 s (30 s)
     # await cerrar_paletas()
     # await bajar_elevador()
     # await subir_elevador_todo()

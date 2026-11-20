@@ -72,6 +72,23 @@ def color_mas_repetido(lista):
     empatados = [c for c in cuentas if cuentas[c] == maximo]
     return empatados[0], maximo, len(empatados) > 1
 
+def diagnostico_estado(estado):
+    """Traduce el byte 'estado' del ESP32 a texto (ver ESP32.py, comando "robot")."""
+    texto = "completa: {} | bloques filtrados: {}".format(estado & 1, (estado >> 2) & 15)
+    if estado & 64:
+        texto += " | ERROR leyendo la HuskyLens"
+    if estado & 128:
+        texto += " | NO hay nada en el I2C (cables SDA/SCL o protocolo de la HuskyLens)"
+    return texto
+
+async def prueba_camara(veces=60, cada_ms=500):
+    """Prueba SIN la PC conectada al ESP32: poner el robot frente al mosaico y mirar la consola
+    de Pybricks. Imprime lo que manda el ESP32 cada 'cada_ms' ms."""
+    for _ in range(veces):
+        _, _, g, estado = await _llamar(0, 0)
+        print("Fila 1:", g[0:4], "Fila 2:", g[4:8], "Fila 3:", g[8:12], "|", diagnostico_estado(estado))
+        await wait(cada_ms)
+
 async def leer_camara(timeout_ms=3000):
     """Espera una lectura completa y devuelve:
     (izquierda, derecha, lado_rojo, color_mas, veces, empate)
@@ -83,7 +100,13 @@ async def leer_camara(timeout_ms=3000):
         if estado & 1:
             break
         if t >= timeout_ms:
-            return [], [], -1, 0, 0, False   # sin lectura
+            # Diagnóstico: lo que mandó el ESP32 aunque la lectura no esté "completa" en este momento
+            print("ESP32 sin lectura completa | grid:", g, "|", diagnostico_estado(estado))
+            # grid guarda la ÚLTIMA lectura completa: si no tiene ceros, alguna vez se leyó bien -> se usa
+            if 0 in g:
+                return [], [], -1, 0, 0, False   # sin lectura
+            print("Se usa la última lectura completa del ESP32")
+            break
         await wait(100)
         t += 100
 

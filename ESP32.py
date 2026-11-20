@@ -73,9 +73,31 @@ async def mover_servos():
 # HUSKYLENS
 # =====================================
 i2c = SoftI2C(scl=Pin(21), sda=Pin(22), freq=100000)
-print("I2C:", i2c.scan())
-hl = HuskyLens(i2c)
-hl.mode_color_recognition()   # quita esta línea si ya lo dejas fijo en la HuskyLens
+DIR_HUSKY = 0x32          # dirección I2C de la HuskyLens (50)
+husky_ok = 0              # diagnóstico: 0 = la HuskyLens todavía no aparece en el I2C
+husky_error = 0           # diagnóstico: 1 = la última lectura de la HuskyLens dio error
+hl = None                 # se crea en conectar_husky() cuando la HuskyLens ya arrancó
+
+def conectar_husky():
+    """Crea la HuskyLens SOLO si ya responde en el I2C. Con el ESP32 alimentado por el hub,
+    el ESP32 arranca antes que la HuskyLens (tarda unos segundos en encender): si se crea
+    antes, la HuskyLens nunca contesta. Devuelve True si quedó conectada."""
+    global hl, husky_ok
+    encontrados = i2c.scan()
+    if DIR_HUSKY not in encontrados:
+        husky_ok = 0
+        return False
+    try:
+        hl = HuskyLens(i2c)
+        hl.mode_color_recognition()   # quita esta línea si ya lo dejas fijo en la HuskyLens
+        husky_ok = 1
+        print("HuskyLens conectada, I2C:", encontrados)
+        return True
+    except Exception as e:
+        sys.print_exception(e)
+        hl = None
+        husky_ok = 0
+        return False
 
 # Última cuadrícula completa leída (0 = desconocido)
 grid = [0] * N
@@ -87,7 +109,12 @@ def attr(b, *names):
             return int(getattr(b, n))
     return 0
 
+bloques_vistos = 0   # diagnóstico: bloques que pasaron el filtro AREA_MIN en la última lectura
+bloques_total = 0    # diagnóstico: bloques que mandó la HuskyLens (sin filtrar)
+
 def leer_grid(blocks):
+    global bloques_vistos, bloques_total
+    bloques_total = len(blocks)
     items = []
     for b in blocks:
         x = attr(b, "x")
@@ -98,6 +125,7 @@ def leer_grid(blocks):
         if w * h >= AREA_MIN and i > 0:
             items.append((x, y, w * h, i))
 
+    bloques_vistos = len(items)
     if len(items) < N:
         return None
 
@@ -114,18 +142,31 @@ def leer_grid(blocks):
     return resultado
 
 async def leer_husky():
-    global grid, grid_ok
+    global grid, grid_ok, husky_error, hl
+    errores_seguidos = 0
     while True:
+        if hl is None:
+            # Todavía no arranca la HuskyLens (o se perdió): reintenta cada 0.5 s
+            if not conectar_husky():
+                await asyncio.sleep_ms(500)
+                continue
         try:
             data = hl.get()
+            errores_seguidos = 0
             nuevo = leer_grid(data["blocks"])
+            husky_error = 0
             if nuevo is not None:
                 grid = nuevo
                 grid_ok = 1
             else:
                 grid_ok = 0      # grid conserva la última lectura buena
         except Exception as e:
+            husky_error = 1
             sys.print_exception(e)
+            errores_seguidos += 1
+            if errores_seguidos >= 10:   # ~1 s fallando: se vuelve a conectar desde cero
+                hl = None
+                errores_seguidos = 0
         await asyncio.sleep_ms(100)
 
 # =====================================
@@ -136,6 +177,9 @@ async def leer_husky():
 #                         con lo que mandó y reenvía si no coincide)
 #   estado bit0 = 1 -> lectura de cámara completa
 #   estado bit1 = 1 -> el servo falló
+#   estado bits2-5  -> bloques que pasaron el filtro AREA_MIN (0-15)   (diagnóstico)
+#   estado bit6 = 1 -> la HuskyLens dio error en la última lectura    (diagnóstico)
+#   estado bit7 = 1 -> no se encontró nada en el I2C al arrancar       (diagnóstico)
 # =====================================
 ultimo_pin = 0
 ultimo_grados = 0
@@ -159,7 +203,8 @@ async def robot(pin, grados):
             sys.print_exception(e)
             servo_error = 1
 
-    estado = grid_ok + 2 * servo_error
+    estado = (grid_ok + 2 * servo_error + 4 * min(bloques_vistos, 15)
+              + 64 * husky_error + 128 * (1 - husky_ok))
     return tuple(grid) + (estado, ultimo_pin, ultimo_grados)
 
 # =====================================
@@ -181,6 +226,9 @@ async def main():
         print("Fila 2:", grid[4:8])
         print("Fila 3:", grid[8:12])
         print("Camara completa:", grid_ok)
+        # Si "filtrados" < 12 la lectura nunca sale completa: bloques pequeños (bajar AREA_MIN)
+        # o dos bloques iguales pegados que la HuskyLens junta en uno solo
+        print("Bloques HuskyLens:", bloques_total, "| filtrados (area >=", AREA_MIN, "):", bloques_vistos)
         print("-----")
         await asyncio.sleep(1)
 
